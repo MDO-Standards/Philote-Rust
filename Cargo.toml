@@ -1,0 +1,22 @@
+[package]
+name = "philote"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "philote"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+bench = false
+
+
+[dependencies]
+http-body = "0.4.5"
+hyper = "0.14.27"
+prost = "0.11.9"
+prost-types = "0.11.8"
+tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread"] }
+tonic = "0.9.2"
+
+[build-dependencies]
+tonic-build = "0.9.2"
