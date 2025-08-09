@@ -139,7 +139,7 @@ impl TryFrom<Array> for ArrayData {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StreamOptions {
     pub max_double_per_slice: usize,
     pub max_int_per_slice: usize,
