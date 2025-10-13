@@ -45,7 +45,7 @@ impl DisciplineClient {
     }
 
     pub async fn set_stream_options(&mut self, options: StreamOptions) -> Result<()> {
-        let proto_options = ProtoStreamOptions::from(options.clone());
+        let proto_options = ProtoStreamOptions::from(options);
         self.client
             .set_stream_options(Request::new(proto_options))
             .await?;
@@ -140,7 +140,7 @@ impl Clone for DisciplineClient {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
-            stream_options: self.stream_options.clone(),
+            stream_options: self.stream_options,
         }
     }
 }

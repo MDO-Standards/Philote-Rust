@@ -27,7 +27,7 @@ pub enum PhiloteError {
     IndexOutOfBounds { index: usize, size: usize },
 
     #[error("gRPC communication error: {0}")]
-    GrpcError(#[from] tonic::Status),
+    GrpcError(Box<tonic::Status>),
 
     #[error("Protocol buffer error: {0}")]
     ProtobufError(#[from] prost::DecodeError),
@@ -56,5 +56,11 @@ impl PhiloteError {
 
     pub fn config_error<S: Into<String>>(msg: S) -> Self {
         PhiloteError::ConfigurationError(msg.into())
+    }
+}
+
+impl From<tonic::Status> for PhiloteError {
+    fn from(status: tonic::Status) -> Self {
+        PhiloteError::GrpcError(Box::new(status))
     }
 }

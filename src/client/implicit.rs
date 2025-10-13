@@ -267,10 +267,8 @@ impl ImplicitClient {
         }
 
         // For now, assume 1D arrays - in a full implementation, we'd need shape info
-        Ok(
-            ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[data.len()]), data)
-                .map_err(|e| PhiloteError::array_error(format!("Failed to create array: {}", e)))?,
-        )
+        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[data.len()]), data)
+            .map_err(|e| PhiloteError::array_error(format!("Failed to create array: {}", e)))
     }
 }
 
@@ -279,7 +277,7 @@ impl Clone for ImplicitClient {
         Self {
             base_client: self.base_client.clone(),
             implicit_client: self.implicit_client.clone(),
-            stream_options: self.stream_options.clone(),
+            stream_options: self.stream_options,
         }
     }
 }

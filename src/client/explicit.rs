@@ -213,10 +213,8 @@ impl ExplicitClient {
         }
 
         // For now, assume 1D arrays - in a full implementation, we'd need shape info
-        Ok(
-            ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[data.len()]), data)
-                .map_err(|e| PhiloteError::array_error(format!("Failed to create array: {}", e)))?,
-        )
+        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[data.len()]), data)
+            .map_err(|e| PhiloteError::array_error(format!("Failed to create array: {}", e)))
     }
 }
 
@@ -225,7 +223,7 @@ impl Clone for ExplicitClient {
         Self {
             base_client: self.base_client.clone(),
             explicit_client: self.explicit_client.clone(),
-            stream_options: self.stream_options.clone(),
+            stream_options: self.stream_options,
         }
     }
 }
