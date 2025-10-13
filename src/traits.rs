@@ -1,54 +1,54 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 
-use crate::{Result, ArrayMap, PartialMap, PhiloteError};
-use crate::philote_info::{VariableMetaData, VariableType, DisciplineProperties};
+use crate::philote_info::{DisciplineProperties, VariableMetaData, VariableType};
+use crate::{ArrayMap, PartialMap, PhiloteError, Result};
 
 pub trait Discipline: Send + Sync {
     fn name(&self) -> &str {
         "UnnamedDiscipline"
     }
-    
+
     fn version(&self) -> &str {
         "0.1.0"
     }
-    
+
     fn is_continuous(&self) -> bool {
         true
     }
-    
+
     fn is_differentiable(&self) -> bool {
         false
     }
-    
+
     fn provides_gradients(&self) -> bool {
         false
     }
-    
+
     fn initialize(&mut self) -> Result<()> {
         Ok(())
     }
-    
+
     fn add_input(&mut self, name: &str, shape: &[usize], units: &str) -> Result<()>;
-    
+
     fn add_output(&mut self, name: &str, shape: &[usize], units: &str) -> Result<()>;
-    
+
     fn add_option(&mut self, name: &str, option_type: &str) -> Result<()>;
-    
+
     fn set_options(&mut self, options: &HashMap<String, serde_json::Value>) -> Result<()>;
-    
+
     fn setup(&mut self) -> Result<()>;
-    
+
     fn setup_partials(&mut self) -> Result<()> {
         Ok(())
     }
-    
+
     fn declare_partials(&mut self, func: &str, var: &str) -> Result<()>;
-    
+
     fn get_variable_definitions(&self) -> Result<Vec<VariableMetaData>>;
-    
+
     fn get_partials_definitions(&self) -> Result<Vec<(String, String)>>;
-    
+
     fn get_properties(&self) -> DisciplineProperties {
         DisciplineProperties {
             continuous: self.is_continuous(),
@@ -58,14 +58,14 @@ pub trait Discipline: Send + Sync {
             version: self.version().to_string(),
         }
     }
-    
+
     fn get_available_options(&self) -> Result<HashMap<String, String>>;
 }
 
 #[async_trait]
 pub trait ExplicitDiscipline: Discipline {
     async fn compute(&self, inputs: &ArrayMap) -> Result<ArrayMap>;
-    
+
     async fn compute_partials(&self, _inputs: &ArrayMap) -> Result<PartialMap> {
         Err(PhiloteError::not_implemented("compute_partials"))
     }
@@ -74,14 +74,23 @@ pub trait ExplicitDiscipline: Discipline {
 #[async_trait]
 pub trait ImplicitDiscipline: Discipline {
     async fn compute_residuals(&self, inputs: &ArrayMap, outputs: &ArrayMap) -> Result<ArrayMap>;
-    
+
     async fn solve_residuals(&self, inputs: &ArrayMap) -> Result<ArrayMap>;
-    
-    async fn residual_partials(&self, _inputs: &ArrayMap, _outputs: &ArrayMap) -> Result<PartialMap> {
+
+    async fn residual_partials(
+        &self,
+        _inputs: &ArrayMap,
+        _outputs: &ArrayMap,
+    ) -> Result<PartialMap> {
         Err(PhiloteError::not_implemented("residual_partials"))
     }
 
-    async fn apply_linear(&self, _inputs: &ArrayMap, _outputs: &ArrayMap, _mode: &str) -> Result<ArrayMap> {
+    async fn apply_linear(
+        &self,
+        _inputs: &ArrayMap,
+        _outputs: &ArrayMap,
+        _mode: &str,
+    ) -> Result<ArrayMap> {
         Err(PhiloteError::not_implemented("apply_linear"))
     }
 }
@@ -103,19 +112,19 @@ impl VariableInfo {
             units,
         }
     }
-    
+
     pub fn input(name: String, shape: Vec<usize>, units: String) -> Self {
         Self::new(name, VariableType::KInput, shape, units)
     }
-    
+
     pub fn output(name: String, shape: Vec<usize>, units: String) -> Self {
         Self::new(name, VariableType::KOutput, shape, units)
     }
-    
+
     pub fn residual(name: String, shape: Vec<usize>, units: String) -> Self {
         Self::new(name, VariableType::KResidual, shape, units)
     }
-    
+
     pub fn size(&self) -> usize {
         self.shape.iter().product()
     }

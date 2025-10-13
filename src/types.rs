@@ -1,7 +1,7 @@
 use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
 
-use crate::{Result, PhiloteError};
-use crate::philote_info::{Array, VariableType, PartialsMetaData};
+use crate::philote_info::{Array, PartialsMetaData, VariableType};
+use crate::{PhiloteError, Result};
 
 #[derive(Debug, Clone)]
 pub struct VariableData {
@@ -20,20 +20,20 @@ impl VariableData {
             var_type,
         }
     }
-    
+
     pub fn zeros(name: String, shape: &[usize], units: String, var_type: VariableType) -> Self {
         let data = ArrayD::zeros(shape);
         Self::new(name, data, units, var_type)
     }
-    
+
     pub fn shape(&self) -> &[usize] {
         self.data.shape()
     }
-    
+
     pub fn size(&self) -> usize {
         self.data.len()
     }
-    
+
     pub fn view(&self) -> ArrayViewD<'_, f64> {
         self.data.view()
     }
@@ -41,12 +41,18 @@ impl VariableData {
     pub fn view_mut(&mut self) -> ArrayViewMutD<'_, f64> {
         self.data.view_mut()
     }
-    
+
     pub fn flatten(&self) -> Vec<f64> {
         self.data.iter().copied().collect()
     }
-    
-    pub fn from_flat(name: String, flat_data: &[f64], shape: &[usize], units: String, var_type: VariableType) -> Result<Self> {
+
+    pub fn from_flat(
+        name: String,
+        flat_data: &[f64],
+        shape: &[usize],
+        units: String,
+        var_type: VariableType,
+    ) -> Result<Self> {
         let expected_size: usize = shape.iter().product();
         if flat_data.len() != expected_size {
             return Err(PhiloteError::ShapeMismatch {
@@ -54,10 +60,11 @@ impl VariableData {
                 actual: vec![flat_data.len()],
             });
         }
-        
-        let data = ArrayD::from_shape_vec(shape, flat_data.to_vec())
-            .map_err(|e| PhiloteError::array_error(format!("Failed to create array from flat data: {}", e)))?;
-        
+
+        let data = ArrayD::from_shape_vec(shape, flat_data.to_vec()).map_err(|e| {
+            PhiloteError::array_error(format!("Failed to create array from flat data: {}", e))
+        })?;
+
         Ok(Self::new(name, data, units, var_type))
     }
 }
@@ -90,7 +97,7 @@ impl ArrayData {
             data,
         }
     }
-    
+
     pub fn size(&self) -> usize {
         self.data.len()
     }
@@ -111,21 +118,22 @@ impl From<ArrayData> for Array {
 
 impl TryFrom<Array> for ArrayData {
     type Error = PhiloteError;
-    
+
     fn try_from(array: Array) -> Result<Self> {
-        let var_type = VariableType::try_from(array.r#type)
-            .map_err(|_| PhiloteError::InvalidVariableType(format!("Invalid type: {}", array.r#type)))?;
-        
+        let var_type = VariableType::try_from(array.r#type).map_err(|_| {
+            PhiloteError::InvalidVariableType(format!("Invalid type: {}", array.r#type))
+        })?;
+
         if array.data.is_empty() {
             return Err(PhiloteError::array_error("Array contains no data"));
         }
-        
+
         let subname = if array.subname.is_empty() {
             None
         } else {
             Some(array.subname)
         };
-        
+
         Ok(ArrayData::new(
             array.name,
             subname,
@@ -184,7 +192,7 @@ impl PartialsInfo {
             shape,
         }
     }
-    
+
     pub fn size(&self) -> usize {
         self.shape.iter().product()
     }
@@ -208,15 +216,15 @@ impl ArrayChunker {
     pub fn new(chunk_size: usize) -> Self {
         Self { chunk_size }
     }
-    
+
     pub fn chunk_array(&self, name: &str, data: &[f64], var_type: VariableType) -> Vec<ArrayData> {
         let mut chunks = Vec::new();
         let mut start = 0;
-        
+
         while start < data.len() {
             let end = std::cmp::min(start + self.chunk_size, data.len()) - 1;
             let chunk_data = data[start..=end].to_vec();
-            
+
             chunks.push(ArrayData::new(
                 name.to_string(),
                 None,
@@ -225,10 +233,10 @@ impl ArrayChunker {
                 var_type,
                 chunk_data,
             ));
-            
+
             start = end + 1;
         }
-        
+
         chunks
     }
 }
