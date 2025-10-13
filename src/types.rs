@@ -240,3 +240,302 @@ impl ArrayChunker {
         chunks
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::ArrayD;
+
+    // VariableData tests
+    #[test]
+    fn test_variable_data_new() {
+        let data = ArrayD::from_elem(vec![2, 3], 1.0);
+        let var = VariableData::new(
+            "x".to_string(),
+            data,
+            "m".to_string(),
+            VariableType::KInput,
+        );
+        assert_eq!(var.name, "x");
+        assert_eq!(var.units, "m");
+        assert_eq!(var.shape(), &[2, 3]);
+        assert_eq!(var.size(), 6);
+    }
+
+    #[test]
+    fn test_variable_data_zeros() {
+        let var = VariableData::zeros(
+            "y".to_string(),
+            &[3, 4],
+            "kg".to_string(),
+            VariableType::KOutput,
+        );
+        assert_eq!(var.name, "y");
+        assert_eq!(var.shape(), &[3, 4]);
+        assert_eq!(var.size(), 12);
+        assert_eq!(var.flatten(), vec![0.0; 12]);
+    }
+
+    #[test]
+    fn test_variable_data_flatten() {
+        let data = ArrayD::from_shape_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let var = VariableData::new("x".to_string(), data, "".to_string(), VariableType::KInput);
+        let flat = var.flatten();
+        assert_eq!(flat, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_variable_data_from_flat() {
+        let flat_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let var = VariableData::from_flat(
+            "z".to_string(),
+            &flat_data,
+            &[2, 3],
+            "".to_string(),
+            VariableType::KOutput,
+        )
+        .unwrap();
+        assert_eq!(var.shape(), &[2, 3]);
+        assert_eq!(var.flatten(), flat_data);
+    }
+
+    #[test]
+    fn test_variable_data_from_flat_shape_mismatch() {
+        let flat_data = vec![1.0, 2.0, 3.0];
+        let result = VariableData::from_flat(
+            "z".to_string(),
+            &flat_data,
+            &[2, 3], // Expects 6 elements, not 3
+            "".to_string(),
+            VariableType::KOutput,
+        );
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PhiloteError::ShapeMismatch { .. }));
+    }
+
+    #[test]
+    fn test_variable_data_view_mut() {
+        let data = ArrayD::from_elem(vec![2, 2], 0.0);
+        let mut var = VariableData::new("x".to_string(), data, "".to_string(), VariableType::KInput);
+        {
+            let mut view = var.view_mut();
+            view[[0, 0]] = 5.0;
+        }
+        assert_eq!(var.data[[0, 0]], 5.0);
+    }
+
+    // ArrayData tests
+    #[test]
+    fn test_array_data_new() {
+        let data = vec![1.0, 2.0, 3.0];
+        let arr = ArrayData::new(
+            "x".to_string(),
+            None,
+            0,
+            2,
+            VariableType::KInput,
+            data.clone(),
+        );
+        assert_eq!(arr.name, "x");
+        assert_eq!(arr.subname, None);
+        assert_eq!(arr.start, 0);
+        assert_eq!(arr.end, 2);
+        assert_eq!(arr.size(), 3);
+        assert_eq!(arr.data, data);
+    }
+
+    #[test]
+    fn test_array_data_with_subname() {
+        let arr = ArrayData::new(
+            "f".to_string(),
+            Some("x".to_string()),
+            0,
+            4,
+            VariableType::KPartial,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        );
+        assert_eq!(arr.subname, Some("x".to_string()));
+    }
+
+    #[test]
+    fn test_array_data_to_proto() {
+        let arr = ArrayData::new(
+            "x".to_string(),
+            Some("sub".to_string()),
+            0,
+            2,
+            VariableType::KInput,
+            vec![1.0, 2.0, 3.0],
+        );
+        let proto: Array = arr.into();
+        assert_eq!(proto.name, "x");
+        assert_eq!(proto.subname, "sub");
+        assert_eq!(proto.start, 0);
+        assert_eq!(proto.end, 2);
+        assert_eq!(proto.data, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_array_data_from_proto() {
+        let proto = Array {
+            name: "y".to_string(),
+            subname: "".to_string(),
+            start: 5,
+            end: 9,
+            r#type: VariableType::KOutput.into(),
+            data: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        };
+        let arr = ArrayData::try_from(proto).unwrap();
+        assert_eq!(arr.name, "y");
+        assert_eq!(arr.subname, None);
+        assert_eq!(arr.start, 5);
+        assert_eq!(arr.end, 9);
+        assert_eq!(arr.data, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn test_array_data_from_proto_empty_data() {
+        let proto = Array {
+            name: "x".to_string(),
+            subname: "".to_string(),
+            start: 0,
+            end: 0,
+            r#type: VariableType::KInput.into(),
+            data: vec![],
+        };
+        let result = ArrayData::try_from(proto);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PhiloteError::ArrayError(_)));
+    }
+
+    #[test]
+    fn test_array_data_from_proto_invalid_type() {
+        let proto = Array {
+            name: "x".to_string(),
+            subname: "".to_string(),
+            start: 0,
+            end: 2,
+            r#type: 999, // Invalid type
+            data: vec![1.0, 2.0, 3.0],
+        };
+        let result = ArrayData::try_from(proto);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PhiloteError::InvalidVariableType(_)));
+    }
+
+    // StreamOptions tests
+    #[test]
+    fn test_stream_options_default() {
+        let opts = StreamOptions::default();
+        assert_eq!(opts.max_double_per_slice, 1000);
+        assert_eq!(opts.max_int_per_slice, 1000);
+    }
+
+    #[test]
+    fn test_stream_options_to_proto() {
+        let opts = StreamOptions {
+            max_double_per_slice: 500,
+            max_int_per_slice: 250,
+        };
+        let proto: crate::philote_info::StreamOptions = opts.into();
+        assert_eq!(proto.num_double, 500);
+    }
+
+    #[test]
+    fn test_stream_options_from_proto() {
+        let proto = crate::philote_info::StreamOptions { num_double: 750 };
+        let opts: StreamOptions = proto.into();
+        assert_eq!(opts.max_double_per_slice, 750);
+        assert_eq!(opts.max_int_per_slice, 1000); // Default
+    }
+
+    #[test]
+    fn test_stream_options_copy() {
+        let opts1 = StreamOptions::default();
+        let opts2 = opts1; // Should copy, not move
+        assert_eq!(opts1.max_double_per_slice, opts2.max_double_per_slice);
+    }
+
+    // PartialsInfo tests
+    #[test]
+    fn test_partials_info_new() {
+        let info = PartialsInfo::new("f".to_string(), "x".to_string(), vec![3, 4]);
+        assert_eq!(info.name, "f");
+        assert_eq!(info.subname, "x");
+        assert_eq!(info.shape, vec![3, 4]);
+        assert_eq!(info.size(), 12);
+    }
+
+    #[test]
+    fn test_partials_info_size_scalar() {
+        let info = PartialsInfo::new("f".to_string(), "x".to_string(), vec![1]);
+        assert_eq!(info.size(), 1);
+    }
+
+    #[test]
+    fn test_partials_info_to_proto() {
+        let info = PartialsInfo::new("df".to_string(), "dx".to_string(), vec![2, 3]);
+        let proto: PartialsMetaData = info.into();
+        assert_eq!(proto.name, "df");
+        assert_eq!(proto.subname, "dx");
+        assert_eq!(proto.shape, vec![2, 3]);
+    }
+
+    // ArrayChunker tests
+    #[test]
+    fn test_array_chunker_exact_chunks() {
+        let chunker = ArrayChunker::new(3);
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let chunks = chunker.chunk_array("x", &data, VariableType::KInput);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].start, 0);
+        assert_eq!(chunks[0].end, 2);
+        assert_eq!(chunks[0].data, vec![1.0, 2.0, 3.0]);
+        assert_eq!(chunks[1].start, 3);
+        assert_eq!(chunks[1].end, 5);
+        assert_eq!(chunks[1].data, vec![4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_array_chunker_partial_last_chunk() {
+        let chunker = ArrayChunker::new(4);
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let chunks = chunker.chunk_array("y", &data, VariableType::KOutput);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].data, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(chunks[1].data, vec![5.0]);
+        assert_eq!(chunks[1].start, 4);
+        assert_eq!(chunks[1].end, 4);
+    }
+
+    #[test]
+    fn test_array_chunker_single_chunk() {
+        let chunker = ArrayChunker::new(10);
+        let data = vec![1.0, 2.0, 3.0];
+        let chunks = chunker.chunk_array("z", &data, VariableType::KInput);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].data, data);
+    }
+
+    #[test]
+    fn test_array_chunker_single_element() {
+        let chunker = ArrayChunker::new(5);
+        let data = vec![42.0];
+        let chunks = chunker.chunk_array("a", &data, VariableType::KInput);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].start, 0);
+        assert_eq!(chunks[0].end, 0);
+        assert_eq!(chunks[0].data, vec![42.0]);
+    }
+
+    #[test]
+    fn test_array_chunker_preserves_name_and_type() {
+        let chunker = ArrayChunker::new(2);
+        let data = vec![1.0, 2.0, 3.0];
+        let chunks = chunker.chunk_array("test", &data, VariableType::KPartial);
+        for chunk in chunks {
+            assert_eq!(chunk.name, "test");
+            assert_eq!(chunk.var_type, VariableType::KPartial);
+        }
+    }
+}

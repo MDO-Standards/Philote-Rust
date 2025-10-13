@@ -204,3 +204,284 @@ impl<T> std::ops::IndexMut<&(String, String)> for PairDict<T> {
         self.data.get_mut(key).expect("Key not found")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::ArrayD;
+
+    #[test]
+    fn test_create_flattened_view() {
+        let arr = ArrayD::from_shape_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        let flat = create_flattened_view(&arr);
+        assert_eq!(flat, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_create_flattened_view_1d() {
+        let arr = ArrayD::from_shape_vec(vec![4], vec![10.0, 20.0, 30.0, 40.0]).unwrap();
+        let flat = create_flattened_view(&arr);
+        assert_eq!(flat, vec![10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn test_preallocate_arrays_no_filter() {
+        let meta = vec![
+            VariableMetaData {
+                name: "x".to_string(),
+                r#type: VariableType::KInput as i32,
+                shape: vec![2, 3],
+                units: "m".to_string(),
+            },
+            VariableMetaData {
+                name: "y".to_string(),
+                r#type: VariableType::KOutput as i32,
+                shape: vec![3],
+                units: "kg".to_string(),
+            },
+        ];
+        let arrays = preallocate_arrays(&meta, None).unwrap();
+        assert_eq!(arrays.len(), 2);
+        assert_eq!(arrays["x"].shape(), &[2, 3]);
+        assert_eq!(arrays["y"].shape(), &[3]);
+    }
+
+    #[test]
+    fn test_preallocate_arrays_with_filter() {
+        let meta = vec![
+            VariableMetaData {
+                name: "x".to_string(),
+                r#type: VariableType::KInput as i32,
+                shape: vec![2],
+                units: "".to_string(),
+            },
+            VariableMetaData {
+                name: "y".to_string(),
+                r#type: VariableType::KOutput as i32,
+                shape: vec![3],
+                units: "".to_string(),
+            },
+        ];
+        let arrays = preallocate_arrays(&meta, Some(VariableType::KInput)).unwrap();
+        assert_eq!(arrays.len(), 1);
+        assert!(arrays.contains_key("x"));
+        assert!(!arrays.contains_key("y"));
+    }
+
+    #[test]
+    fn test_preallocate_arrays_invalid_type() {
+        let meta = vec![VariableMetaData {
+            name: "x".to_string(),
+            r#type: 999, // Invalid type
+            shape: vec![2],
+            units: "".to_string(),
+        }];
+        let result = preallocate_arrays(&meta, None);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PhiloteError::InvalidVariableType(_)));
+    }
+
+    #[test]
+    fn test_preallocate_partials_scalar_to_scalar() {
+        let var_meta = vec![
+            VariableMetaData {
+                name: "f".to_string(),
+                r#type: VariableType::KOutput as i32,
+                shape: vec![1],
+                units: "".to_string(),
+            },
+            VariableMetaData {
+                name: "x".to_string(),
+                r#type: VariableType::KInput as i32,
+                shape: vec![1],
+                units: "".to_string(),
+            },
+        ];
+        let partials_meta = vec![("f".to_string(), "x".to_string())];
+        let partials = preallocate_partials(&var_meta, &partials_meta).unwrap();
+        assert_eq!(partials.len(), 1);
+        assert_eq!(partials[&("f".to_string(), "x".to_string())].shape(), &[1]);
+    }
+
+    #[test]
+    fn test_preallocate_partials_vector_to_vector() {
+        let var_meta = vec![
+            VariableMetaData {
+                name: "f".to_string(),
+                r#type: VariableType::KOutput as i32,
+                shape: vec![3],
+                units: "".to_string(),
+            },
+            VariableMetaData {
+                name: "x".to_string(),
+                r#type: VariableType::KInput as i32,
+                shape: vec![2],
+                units: "".to_string(),
+            },
+        ];
+        let partials_meta = vec![("f".to_string(), "x".to_string())];
+        let partials = preallocate_partials(&var_meta, &partials_meta).unwrap();
+        // Shape should be [3, 2] for df/dx
+        assert_eq!(
+            partials[&("f".to_string(), "x".to_string())].shape(),
+            &[3, 2]
+        );
+    }
+
+    #[test]
+    fn test_preallocate_partials_missing_variable() {
+        let var_meta = vec![VariableMetaData {
+            name: "f".to_string(),
+            r#type: VariableType::KOutput as i32,
+            shape: vec![1],
+            units: "".to_string(),
+        }];
+        let partials_meta = vec![("f".to_string(), "x".to_string())];
+        let result = preallocate_partials(&var_meta, &partials_meta);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PhiloteError::VariableNotFound(_)));
+    }
+
+    #[test]
+    fn test_calculate_partial_shape() {
+        assert_eq!(calculate_partial_shape(&[1], &[1]), vec![1]);
+        assert_eq!(calculate_partial_shape(&[1], &[3]), vec![3]);
+        assert_eq!(calculate_partial_shape(&[4], &[1]), vec![4]);
+        assert_eq!(calculate_partial_shape(&[3], &[2]), vec![3, 2]);
+        assert_eq!(calculate_partial_shape(&[2, 3], &[4, 5]), vec![2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_chunk_arrays_for_streaming() {
+        let mut arrays = HashMap::new();
+        arrays.insert(
+            "x".to_string(),
+            ArrayD::from_shape_vec(vec![6], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+        );
+        arrays.insert(
+            "y".to_string(),
+            ArrayD::from_shape_vec(vec![4], vec![10.0, 20.0, 30.0, 40.0]).unwrap(),
+        );
+        let chunks = chunk_arrays_for_streaming(&arrays, VariableType::KInput, 3);
+        // x: 6 elements / 3 per chunk = 2 chunks
+        // y: 4 elements / 3 per chunk = 2 chunks (3 + 1)
+        // Total: 4 chunks
+        assert_eq!(chunks.len(), 4);
+        // Verify all chunks have correct type
+        for chunk in &chunks {
+            assert_eq!(chunk.var_type, VariableType::KInput);
+        }
+    }
+
+    #[test]
+    fn test_validate_array_shapes_valid() {
+        let mut arrays = HashMap::new();
+        arrays.insert("x".to_string(), ArrayD::zeros(vec![2, 3]));
+        arrays.insert("y".to_string(), ArrayD::zeros(vec![4]));
+        let meta = vec![
+            VariableMetaData {
+                name: "x".to_string(),
+                r#type: VariableType::KInput as i32,
+                shape: vec![2, 3],
+                units: "".to_string(),
+            },
+            VariableMetaData {
+                name: "y".to_string(),
+                r#type: VariableType::KOutput as i32,
+                shape: vec![4],
+                units: "".to_string(),
+            },
+        ];
+        let result = validate_array_shapes(&arrays, &meta);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_array_shapes_mismatch() {
+        let mut arrays = HashMap::new();
+        arrays.insert("x".to_string(), ArrayD::zeros(vec![2, 3]));
+        let meta = vec![VariableMetaData {
+            name: "x".to_string(),
+            r#type: VariableType::KInput as i32,
+            shape: vec![3, 2], // Wrong shape
+            units: "".to_string(),
+        }];
+        let result = validate_array_shapes(&arrays, &meta);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PhiloteError::ShapeMismatch { .. }));
+    }
+
+    #[test]
+    fn test_pair_dict_new() {
+        let dict: PairDict<i32> = PairDict::new();
+        assert_eq!(dict.data.len(), 0);
+    }
+
+    #[test]
+    fn test_pair_dict_insert_and_get() {
+        let mut dict = PairDict::new();
+        dict.insert(("f".to_string(), "x".to_string()), 42);
+        assert_eq!(dict.get(&("f".to_string(), "x".to_string())), Some(&42));
+        assert_eq!(dict.get(&("g".to_string(), "x".to_string())), None);
+    }
+
+    #[test]
+    fn test_pair_dict_get_mut() {
+        let mut dict = PairDict::new();
+        dict.insert(("f".to_string(), "x".to_string()), 10);
+        if let Some(val) = dict.get_mut(&("f".to_string(), "x".to_string())) {
+            *val = 20;
+        }
+        assert_eq!(dict.get(&("f".to_string(), "x".to_string())), Some(&20));
+    }
+
+    #[test]
+    fn test_pair_dict_index() {
+        let mut dict = PairDict::new();
+        let key = ("f".to_string(), "x".to_string());
+        dict.insert(key.clone(), 100);
+        assert_eq!(dict[&key], 100);
+    }
+
+    #[test]
+    fn test_pair_dict_index_mut() {
+        let mut dict = PairDict::new();
+        let key = ("f".to_string(), "x".to_string());
+        dict.insert(key.clone(), 50);
+        dict[&key] = 75;
+        assert_eq!(dict[&key], 75);
+    }
+
+    #[test]
+    fn test_pair_dict_iter() {
+        let mut dict = PairDict::new();
+        dict.insert(("f1".to_string(), "x1".to_string()), 1);
+        dict.insert(("f2".to_string(), "x2".to_string()), 2);
+        let count = dict.iter().count();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_pair_dict_keys() {
+        let mut dict = PairDict::new();
+        dict.insert(("f".to_string(), "x".to_string()), 1);
+        dict.insert(("g".to_string(), "y".to_string()), 2);
+        let keys: Vec<_> = dict.keys().collect();
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn test_pair_dict_values() {
+        let mut dict = PairDict::new();
+        dict.insert(("f".to_string(), "x".to_string()), 10);
+        dict.insert(("g".to_string(), "y".to_string()), 20);
+        let sum: i32 = dict.values().sum();
+        assert_eq!(sum, 30);
+    }
+
+    #[test]
+    fn test_pair_dict_default() {
+        let dict: PairDict<String> = PairDict::default();
+        assert_eq!(dict.data.len(), 0);
+    }
+}
