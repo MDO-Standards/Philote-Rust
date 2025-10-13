@@ -1,13 +1,10 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::pin::Pin;
-use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::{Result, PhiloteError, ArrayMap, PartialMap};
+use crate::{ArrayMap, PartialMap};
 use crate::traits::ImplicitDiscipline;
-use crate::types::{StreamOptions, ArrayData};
+use crate::types::ArrayData;
 use crate::utils::chunk_arrays_for_streaming;
 use crate::server::base::DisciplineServer;
 use crate::philote_info::{

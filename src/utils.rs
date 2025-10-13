@@ -1,15 +1,15 @@
 use std::collections::HashMap;
-use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
+use ndarray::{ArrayD, ArrayViewMutD};
 
 use crate::{Result, PhiloteError, ArrayMap, PartialMap};
-use crate::types::{VariableData, ArrayData, ArrayChunker};
+use crate::types::{ArrayData, ArrayChunker};
 use crate::philote_info::{VariableType, VariableMetaData};
 
 pub fn create_flattened_view(array: &ArrayD<f64>) -> Vec<f64> {
     array.iter().copied().collect()
 }
 
-pub fn get_flattened_view_mut(array: &mut ArrayD<f64>) -> ArrayViewMutD<f64> {
+pub fn get_flattened_view_mut(array: &mut ArrayD<f64>) -> ArrayViewMutD<'_, f64> {
     array.view_mut()
 }
 

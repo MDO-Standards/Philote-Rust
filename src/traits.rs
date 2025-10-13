@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
-use ndarray::ArrayD;
 
 use crate::{Result, ArrayMap, PartialMap, PhiloteError};
 use crate::philote_info::{VariableMetaData, VariableType, DisciplineProperties};
@@ -67,7 +66,7 @@ pub trait Discipline: Send + Sync {
 pub trait ExplicitDiscipline: Discipline {
     async fn compute(&self, inputs: &ArrayMap) -> Result<ArrayMap>;
     
-    async fn compute_partials(&self, inputs: &ArrayMap) -> Result<PartialMap> {
+    async fn compute_partials(&self, _inputs: &ArrayMap) -> Result<PartialMap> {
         Err(PhiloteError::not_implemented("compute_partials"))
     }
 }
@@ -78,11 +77,11 @@ pub trait ImplicitDiscipline: Discipline {
     
     async fn solve_residuals(&self, inputs: &ArrayMap) -> Result<ArrayMap>;
     
-    async fn residual_partials(&self, inputs: &ArrayMap, outputs: &ArrayMap) -> Result<PartialMap> {
+    async fn residual_partials(&self, _inputs: &ArrayMap, _outputs: &ArrayMap) -> Result<PartialMap> {
         Err(PhiloteError::not_implemented("residual_partials"))
     }
-    
-    async fn apply_linear(&self, inputs: &ArrayMap, outputs: &ArrayMap, mode: &str) -> Result<ArrayMap> {
+
+    async fn apply_linear(&self, _inputs: &ArrayMap, _outputs: &ArrayMap, _mode: &str) -> Result<ArrayMap> {
         Err(PhiloteError::not_implemented("apply_linear"))
     }
 }

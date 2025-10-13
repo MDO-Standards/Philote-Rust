@@ -1,9 +1,7 @@
-use std::collections::HashMap;
 use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
-use serde::{Deserialize, Serialize};
 
 use crate::{Result, PhiloteError};
-use crate::philote_info::{Array, VariableType, VariableMetaData, PartialsMetaData};
+use crate::philote_info::{Array, VariableType, PartialsMetaData};
 
 #[derive(Debug, Clone)]
 pub struct VariableData {
@@ -36,11 +34,11 @@ impl VariableData {
         self.data.len()
     }
     
-    pub fn view(&self) -> ArrayViewD<f64> {
+    pub fn view(&self) -> ArrayViewD<'_, f64> {
         self.data.view()
     }
-    
-    pub fn view_mut(&mut self) -> ArrayViewMutD<f64> {
+
+    pub fn view_mut(&mut self) -> ArrayViewMutD<'_, f64> {
         self.data.view_mut()
     }
     

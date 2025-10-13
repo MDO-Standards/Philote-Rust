@@ -6,7 +6,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::{Result, PhiloteError, ArrayMap};
 use crate::traits::Discipline;
 use crate::types::{StreamOptions, ArrayData};
-use crate::utils::{preallocate_arrays, validate_array_shapes, PairDict};
+use crate::utils::preallocate_arrays;
 use crate::philote_info::{
     discipline_service_server::DisciplineService,
     DisciplineProperties, StreamOptions as ProtoStreamOptions,
@@ -229,7 +229,7 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         let options_proto = request.into_inner();
         
         // Convert protobuf Struct to HashMap<String, serde_json::Value>
-        let options = if let Some(struct_val) = options_proto.options {
+        let options = if let Some(_struct_val) = options_proto.options {
             // For now, create an empty map - proper protobuf struct conversion would need more work
             HashMap::new()
         } else {

@@ -1,13 +1,13 @@
 use std::collections::{HashMap, BTreeMap};
 use tonic::transport::Channel;
-use tonic::{Request, Response, Status};
+use tonic::Request;
 
-use crate::{Result, PhiloteError, ArrayMap};
+use crate::{Result, PhiloteError};
 use crate::types::StreamOptions;
 use crate::philote_info::{
     discipline_service_client::DisciplineServiceClient,
     DisciplineProperties, StreamOptions as ProtoStreamOptions,
-    VariableMetaData, PartialsMetaData, OptionsList, DisciplineOptions,
+    VariableMetaData, PartialsMetaData, DisciplineOptions,
 };
 
 pub struct DisciplineClient {
@@ -73,7 +73,7 @@ impl DisciplineClient {
         Ok(options_map)
     }
     
-    pub async fn set_options(&mut self, options: HashMap<String, serde_json::Value>) -> Result<()> {
+    pub async fn set_options(&mut self, _options: HashMap<String, serde_json::Value>) -> Result<()> {
         // For now, just create an empty struct - proper conversion would need more work
         let struct_value = Some(prost_types::Struct { 
             fields: BTreeMap::new() 
