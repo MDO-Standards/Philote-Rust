@@ -250,12 +250,7 @@ mod tests {
     #[test]
     fn test_variable_data_new() {
         let data = ArrayD::from_elem(vec![2, 3], 1.0);
-        let var = VariableData::new(
-            "x".to_string(),
-            data,
-            "m".to_string(),
-            VariableType::KInput,
-        );
+        let var = VariableData::new("x".to_string(), data, "m".to_string(), VariableType::KInput);
         assert_eq!(var.name, "x");
         assert_eq!(var.units, "m");
         assert_eq!(var.shape(), &[2, 3]);
@@ -310,13 +305,17 @@ mod tests {
             VariableType::KOutput,
         );
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PhiloteError::ShapeMismatch { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PhiloteError::ShapeMismatch { .. }
+        ));
     }
 
     #[test]
     fn test_variable_data_view_mut() {
         let data = ArrayD::from_elem(vec![2, 2], 0.0);
-        let mut var = VariableData::new("x".to_string(), data, "".to_string(), VariableType::KInput);
+        let mut var =
+            VariableData::new("x".to_string(), data, "".to_string(), VariableType::KInput);
         {
             let mut view = var.view_mut();
             view[[0, 0]] = 5.0;
@@ -420,7 +419,10 @@ mod tests {
         };
         let result = ArrayData::try_from(proto);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PhiloteError::InvalidVariableType(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PhiloteError::InvalidVariableType(_)
+        ));
     }
 
     // StreamOptions tests

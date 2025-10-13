@@ -120,8 +120,8 @@ fn test_partial_derivatives_workflow() {
 
 #[test]
 fn test_error_propagation() {
-    use philote::types::ArrayData;
     use philote::philote_info::{Array, VariableType};
+    use philote::types::ArrayData;
 
     // Test that invalid data is properly rejected
     let invalid_proto = Array {
@@ -135,7 +135,10 @@ fn test_error_propagation() {
 
     let result = ArrayData::try_from(invalid_proto);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), PhiloteError::InvalidVariableType(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        PhiloteError::InvalidVariableType(_)
+    ));
 }
 
 #[test]

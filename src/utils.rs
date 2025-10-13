@@ -278,7 +278,10 @@ mod tests {
         }];
         let result = preallocate_arrays(&meta, None);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PhiloteError::InvalidVariableType(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PhiloteError::InvalidVariableType(_)
+        ));
     }
 
     #[test]
@@ -339,7 +342,10 @@ mod tests {
         let partials_meta = vec![("f".to_string(), "x".to_string())];
         let result = preallocate_partials(&var_meta, &partials_meta);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PhiloteError::VariableNotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PhiloteError::VariableNotFound(_)
+        ));
     }
 
     #[test]
@@ -408,7 +414,10 @@ mod tests {
         }];
         let result = validate_array_shapes(&arrays, &meta);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PhiloteError::ShapeMismatch { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PhiloteError::ShapeMismatch { .. }
+        ));
     }
 
     #[test]

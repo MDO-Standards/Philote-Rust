@@ -139,10 +139,7 @@ mod tests {
 
     #[test]
     fn test_index_out_of_bounds_display() {
-        let err = PhiloteError::IndexOutOfBounds {
-            index: 5,
-            size: 3,
-        };
+        let err = PhiloteError::IndexOutOfBounds { index: 5, size: 3 };
         assert_eq!(err.to_string(), "Array index out of bounds: 5 >= 3");
     }
 
