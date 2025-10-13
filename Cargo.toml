@@ -12,7 +12,6 @@ bench = false
 
 [dependencies]
 ndarray = "0.16"
-ndarray-linalg = { version = "0.16", optional = true }
 prost = "0.13"
 prost-types = "0.13"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
@@ -30,7 +29,6 @@ tonic-build = "0.12"
 
 [features]
 default = []
-linalg = ["ndarray-linalg"]
 
 [[example]]
 name = "paraboloid"

@@ -45,6 +45,3 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
-
-      - name: Run tests with all features
-        run: cargo test --all-features --verbose
