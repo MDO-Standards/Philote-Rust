@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  fmt:
+    name: Format Check
+    uses: ./.github/workflows/fmt.yml
+
+  clippy:
+    name: Clippy Lints
+    needs: fmt
+    uses: ./.github/workflows/clippy.yml
+
+  build:
+    name: Build
+    needs: clippy
+    uses: ./.github/workflows/build.yml
+
+  test:
+    name: Test
+    needs: build
+    uses: ./.github/workflows/test.yml

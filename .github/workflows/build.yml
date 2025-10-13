@@ -1,17 +1,14 @@
 name: Build
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-    name: Build Project
+    name: Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -43,8 +40,8 @@ jobs:
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - name: Build library
+      - name: Build
         run: cargo build --verbose
 
-      - name: Build examples
-        run: cargo build --examples --verbose
+      - name: Build release
+        run: cargo build --release --verbose
