@@ -9,8 +9,8 @@ use philote::{
     traits::{Discipline, ExplicitDiscipline},
     server::ExplicitServer,
     philote_info::{
-        discipline_service_server::DisciplineServiceServer,
         explicit_service_server::ExplicitServiceServer,
+        discipline_service_server::DisciplineServiceServer,
         VariableMetaData, VariableType,
     },
 };
@@ -206,14 +206,17 @@ async fn main() -> Result<()> {
     println!("🌐 Server listening on: {}", addr);
     println!("📡 Ready to accept client connections!");
     println!("💡 You can now run the client_example to test the connection.");
-    
-    // Start the gRPC server
-    // Note: We can only use the server for one service type due to ownership
+
+    // Start the gRPC server with both ExplicitService and DisciplineService
+    // We need to use std::sync::Arc to share ownership between the two services
+    let server_arc = std::sync::Arc::new(server);
+
     Server::builder()
-        .add_service(ExplicitServiceServer::new(server))
+        .add_service(ExplicitServiceServer::from_arc(server_arc.clone()))
+        .add_service(DisciplineServiceServer::from_arc(server_arc))
         .serve(addr)
         .await
         .map_err(|e| PhiloteError::config_error(format!("Server failed: {}", e)))?;
-    
+
     Ok(())
 }

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use ndarray::ArrayD;
-use tokio::time::{sleep, Duration};
 
 use philote::{
     ArrayMap, Result, PhiloteError,
