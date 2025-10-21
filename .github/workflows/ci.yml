@@ -25,3 +25,9 @@ jobs:
     name: Test
     needs: build
     uses: ./.github/workflows/test.yml
+
+  coverage:
+    name: Code Coverage
+    needs: test
+    uses: ./.github/workflows/coverage.yml
+    secrets: inherit

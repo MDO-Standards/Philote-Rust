@@ -2,6 +2,7 @@
 [![Test](https://github.com/chrislupp/Philote-Rust/actions/workflows/test.yml/badge.svg)](https://github.com/chrislupp/Philote-Rust/actions/workflows/test.yml)
 [![Clippy](https://github.com/chrislupp/Philote-Rust/actions/workflows/clippy.yml/badge.svg)](https://github.com/chrislupp/Philote-Rust/actions/workflows/clippy.yml)
 [![Format Check](https://github.com/chrislupp/Philote-Rust/actions/workflows/fmt.yml/badge.svg)](https://github.com/chrislupp/Philote-Rust/actions/workflows/fmt.yml)
+[![codecov](https://codecov.io/gh/chrislupp/Philote-Rust/branch/main/graph/badge.svg)](https://codecov.io/gh/chrislupp/Philote-Rust)
 
 <div align="center">
 <img src="https://github.com/MDO-Standards/Philote-MDO/blob/main/doc/graphics/logos/philote.svg?raw=true" width="500">
