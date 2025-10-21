@@ -1,3 +1,35 @@
+//! Utility functions for array and variable operations
+//!
+//! This module provides helper functions for common operations on N-dimensional arrays
+//! and discipline variables. These utilities simplify array manipulation, memory
+//! allocation, and validation tasks.
+//!
+//! # Key Functions
+//!
+//! - **Array manipulation**: [`create_flattened_view`], [`get_flattened_view_mut`]
+//! - **Memory allocation**: [`preallocate_arrays`], [`preallocate_partials`]
+//! - **Validation**: `validate_array_shapes`, `validate_variable_names`
+//! - **Streaming**: `collect_streamed_arrays`, `collect_streamed_partials`
+//!
+//! # Example
+//!
+//! ```rust
+//! use philote::utils::preallocate_arrays;
+//! use philote::philote_info::{VariableMetaData, VariableType};
+//!
+//! let var_meta = vec![
+//!     VariableMetaData {
+//!         name: "x".to_string(),
+//!         r#type: VariableType::KInput as i32,
+//!         shape: vec![3],
+//!         units: "m".to_string(),
+//!     },
+//! ];
+//!
+//! let arrays = preallocate_arrays(&var_meta, None).unwrap();
+//! assert_eq!(arrays["x"].shape(), &[3]);
+//! ```
+
 use ndarray::{ArrayD, ArrayViewMutD};
 use std::collections::HashMap;
 

@@ -1,3 +1,34 @@
+//! Client implementations for connecting to Philote servers
+//!
+//! This module provides gRPC clients for communicating with Philote discipline servers.
+//! Clients handle connection management, request serialization, and response deserialization.
+//!
+//! # Client Types
+//!
+//! - [`DisciplineClient`] - Base client for discipline metadata and info
+//! - [`ExplicitClient`] - Client for explicit discipline computations
+//! - [`ImplicitClient`] - Client for implicit discipline with residuals
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use philote::client::ExplicitClient;
+//!
+//! # async fn example() -> philote::Result<()> {
+//! // Connect to a Philote server
+//! let mut client = ExplicitClient::connect("http://localhost:50051").await?;
+//!
+//! // Get discipline information
+//! let info = client.get_info().await?;
+//! println!("Connected to {} v{}", info.name, info.version);
+//!
+//! // Get variable definitions
+//! let variables = client.get_variable_definitions().await?;
+//! println!("Discipline has {} variables", variables.len());
+//! # Ok(())
+//! # }
+//! ```
+
 pub mod base;
 pub mod explicit;
 pub mod implicit;

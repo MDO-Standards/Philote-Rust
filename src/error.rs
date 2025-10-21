@@ -1,5 +1,46 @@
+//! Error types for Philote operations
+//!
+//! This module defines the error types used throughout the Philote library.
+//! All errors implement the standard [`std::error::Error`] trait using the
+//! [`thiserror`] crate for ergonomic error handling.
+//!
+//! # Error Categories
+//!
+//! - **Variable Errors**: [`VariableNotFound`], [`InvalidVariableType`], [`ShapeMismatch`]
+//! - **Lifecycle Errors**: [`DisciplineNotInitialized`], [`SetupNotCalled`]
+//! - **Communication Errors**: [`GrpcError`], [`ProtobufError`]
+//! - **Data Errors**: [`ArrayError`], [`IndexOutOfBounds`]
+//! - **Configuration Errors**: [`InvalidOption`], [`ConfigurationError`]
+//!
+//! [`VariableNotFound`]: PhiloteError::VariableNotFound
+//! [`InvalidVariableType`]: PhiloteError::InvalidVariableType
+//! [`ShapeMismatch`]: PhiloteError::ShapeMismatch
+//! [`DisciplineNotInitialized`]: PhiloteError::DisciplineNotInitialized
+//! [`SetupNotCalled`]: PhiloteError::SetupNotCalled
+//! [`GrpcError`]: PhiloteError::GrpcError
+//! [`ProtobufError`]: PhiloteError::ProtobufError
+//! [`ArrayError`]: PhiloteError::ArrayError
+//! [`IndexOutOfBounds`]: PhiloteError::IndexOutOfBounds
+//! [`InvalidOption`]: PhiloteError::InvalidOption
+//! [`ConfigurationError`]: PhiloteError::ConfigurationError
+//!
+//! # Example
+//!
+//! ```rust
+//! use philote::PhiloteError;
+//!
+//! fn find_variable(name: &str) -> Result<f64, PhiloteError> {
+//!     if name == "x" {
+//!         Ok(42.0)
+//!     } else {
+//!         Err(PhiloteError::VariableNotFound(name.to_string()))
+//!     }
+//! }
+//! ```
+
 use thiserror::Error;
 
+/// Error types for Philote operations
 #[derive(Error, Debug)]
 pub enum PhiloteError {
     #[error("Variable '{0}' not found")]
@@ -46,14 +87,17 @@ pub enum PhiloteError {
 }
 
 impl PhiloteError {
+    /// Create an array operation error with a custom message
     pub fn array_error<S: Into<String>>(msg: S) -> Self {
         PhiloteError::ArrayError(msg.into())
     }
 
+    /// Create a "not implemented" error for features not yet supported
     pub fn not_implemented<S: Into<String>>(feature: S) -> Self {
         PhiloteError::NotImplemented(feature.into())
     }
 
+    /// Create a configuration error with a custom message
     pub fn config_error<S: Into<String>>(msg: S) -> Self {
         PhiloteError::ConfigurationError(msg.into())
     }

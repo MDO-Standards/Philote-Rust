@@ -1,3 +1,20 @@
+//! Data types and Protocol Buffer conversions
+//!
+//! This module provides Rust data structures for working with discipline variables
+//! and arrays, along with conversions to/from Protocol Buffer messages.
+//!
+//! # Key Types
+//!
+//! - [`VariableData`] - Complete variable with name, data array, units, and type
+//! - [`ArrayData`] - Chunked array data for streaming transmission
+//! - [`StreamOptions`] - Configuration for array streaming behavior
+//! - [`ArrayChunker`] - Utility for splitting large arrays into chunks
+//!
+//! # Protocol Buffer Conversion
+//!
+//! Types implement `From` and `TryFrom` traits for seamless conversion between
+//! Rust structures and Protocol Buffer messages, enabling efficient gRPC communication.
+
 use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
 
 use crate::philote_info::{Array, PartialsMetaData, VariableType};
