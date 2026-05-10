@@ -114,3 +114,5 @@ pub type ArrayMap = HashMap<String, ArrayD<f64>>;
 
 /// Map of (output variable, input variable) pairs to their partial derivative arrays
 pub type PartialMap = HashMap<(String, String), ArrayD<f64>>;
+
+pub type DiscreteMap = HashMap<String, prost_types::Value>;

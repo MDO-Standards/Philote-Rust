@@ -84,6 +84,9 @@ pub enum PhiloteError {
 
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
+
+    #[error("Operation cancelled")]
+    Cancelled,
 }
 
 impl PhiloteError {

@@ -64,6 +64,7 @@ impl Discipline for ParaboloidDiscipline {
             name: name.to_string(),
             shape: shape.iter().map(|&s| s as i64).collect(),
             units: units.to_string(),
+            dynamic_shape: false,
         };
         self.variables.push(var_meta);
         Ok(())
@@ -75,6 +76,7 @@ impl Discipline for ParaboloidDiscipline {
             name: name.to_string(),
             shape: shape.iter().map(|&s| s as i64).collect(),
             units: units.to_string(),
+            dynamic_shape: false,
         };
         self.variables.push(var_meta);
         Ok(())

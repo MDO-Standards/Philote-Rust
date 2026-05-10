@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::philote_info::{
-    discipline_service_server::DisciplineService, DataType, DisciplineOptions,
-    DisciplineProperties, OptionsList, PartialsMetaData, StreamOptions as ProtoStreamOptions,
-    VariableMetaData, VariableType,
+    discipline_service_server::DisciplineService, variable_message::Payload, DataType,
+    DisciplineOptions, DisciplineProperties, OptionsList, PartialsMetaData,
+    StreamOptions as ProtoStreamOptions, VariableMessage, VariableMetaData, VariableType,
 };
 use crate::traits::Discipline;
 use crate::types::{ArrayData, StreamOptions};
 use crate::utils::preallocate_arrays;
-use crate::{ArrayMap, PhiloteError, Result};
+use crate::{ArrayMap, DiscreteMap, PhiloteError, Result};
 
 pub struct DisciplineServer<D: Discipline + 'static> {
     discipline: Arc<RwLock<D>>,
@@ -93,62 +94,73 @@ impl<D: Discipline + 'static> DisciplineServer<D> {
         crate::utils::preallocate_partials(&var_definitions, &partial_definitions)
     }
 
-    pub async fn process_input_stream(
+    pub async fn process_variable_message_stream(
         &self,
-        mut request_stream: Streaming<crate::philote_info::Array>,
+        mut request_stream: Streaming<VariableMessage>,
         flat_inputs: &mut HashMap<String, Vec<f64>>,
         mut flat_outputs: Option<&mut HashMap<String, Vec<f64>>>,
+        discrete_inputs: &mut DiscreteMap,
     ) -> Result<()> {
-        while let Some(array_msg) = request_stream.message().await? {
-            let array_data = ArrayData::try_from(array_msg)?;
+        while let Some(msg) = request_stream.message().await? {
+            match msg.payload {
+                Some(Payload::Continuous(array)) => {
+                    let array_data = ArrayData::try_from(array)?;
 
-            match array_data.var_type {
-                VariableType::KInput => {
-                    if let Some(input_vec) = flat_inputs.get_mut(&array_data.name) {
-                        let start = array_data.start;
-                        let end = array_data.end;
+                    match array_data.var_type {
+                        VariableType::KInput => {
+                            if let Some(input_vec) = flat_inputs.get_mut(&array_data.name) {
+                                let start = array_data.start;
+                                let end = array_data.end;
 
-                        if end >= input_vec.len() {
-                            return Err(PhiloteError::IndexOutOfBounds {
-                                index: end,
-                                size: input_vec.len(),
-                            });
-                        }
+                                if end >= input_vec.len() {
+                                    return Err(PhiloteError::IndexOutOfBounds {
+                                        index: end,
+                                        size: input_vec.len(),
+                                    });
+                                }
 
-                        for (i, &value) in array_data.data.iter().enumerate() {
-                            if start + i <= end && start + i < input_vec.len() {
-                                input_vec[start + i] = value;
-                            }
-                        }
-                    }
-                }
-                VariableType::KOutput => {
-                    if let Some(flat_outputs) = &mut flat_outputs {
-                        if let Some(output_vec) = flat_outputs.get_mut(&array_data.name) {
-                            let start = array_data.start;
-                            let end = array_data.end;
-
-                            if end >= output_vec.len() {
-                                return Err(PhiloteError::IndexOutOfBounds {
-                                    index: end,
-                                    size: output_vec.len(),
-                                });
-                            }
-
-                            for (i, &value) in array_data.data.iter().enumerate() {
-                                if start + i <= end && start + i < output_vec.len() {
-                                    output_vec[start + i] = value;
+                                for (i, &value) in array_data.data.iter().enumerate() {
+                                    if start + i <= end && start + i < input_vec.len() {
+                                        input_vec[start + i] = value;
+                                    }
                                 }
                             }
                         }
+                        VariableType::KOutput => {
+                            if let Some(flat_outputs) = &mut flat_outputs {
+                                if let Some(output_vec) = flat_outputs.get_mut(&array_data.name) {
+                                    let start = array_data.start;
+                                    let end = array_data.end;
+
+                                    if end >= output_vec.len() {
+                                        return Err(PhiloteError::IndexOutOfBounds {
+                                            index: end,
+                                            size: output_vec.len(),
+                                        });
+                                    }
+
+                                    for (i, &value) in array_data.data.iter().enumerate() {
+                                        if start + i <= end && start + i < output_vec.len() {
+                                            output_vec[start + i] = value;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(PhiloteError::InvalidVariableType(format!(
+                                "Unexpected variable type in input stream: {:?}",
+                                array_data.var_type
+                            )));
+                        }
                     }
                 }
-                _ => {
-                    return Err(PhiloteError::InvalidVariableType(format!(
-                        "Unexpected variable type in input stream: {:?}",
-                        array_data.var_type
-                    )));
+                Some(Payload::Discrete(discrete_var)) => {
+                    if let Some(value) = discrete_var.value {
+                        discrete_inputs.insert(discrete_var.name, value);
+                    }
                 }
+                None => {}
             }
         }
 
@@ -207,6 +219,7 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
                 "int" => DataType::KInt,
                 "float" | "double" => DataType::KDouble,
                 "str" | "string" => DataType::KString,
+                "struct" => DataType::KStruct,
                 _ => {
                     return Err(Status::invalid_argument(format!(
                         "Invalid option type: {}",
@@ -234,10 +247,8 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
 
         let options_proto = request.into_inner();
 
-        // Convert protobuf Struct to HashMap<String, serde_json::Value>
-        let options = if let Some(_struct_val) = options_proto.options {
-            // For now, create an empty map - proper protobuf struct conversion would need more work
-            HashMap::new()
+        let options = if let Some(struct_val) = options_proto.options {
+            convert_proto_struct_to_json(&struct_val)
         } else {
             HashMap::new()
         };
@@ -254,6 +265,10 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         self.log_if_verbose("Setup called").await;
 
         let mut discipline = self.discipline.write().await;
+
+        discipline
+            .configure()
+            .map_err(|e| Status::internal(format!("Configure failed: {}", e)))?;
 
         discipline
             .setup()
@@ -277,9 +292,20 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         self.log_if_verbose("GetVariableDefinitions called").await;
 
         let discipline = self.discipline.read().await;
-        let var_definitions = discipline
+        let mut var_definitions = discipline
             .get_variable_definitions()
             .map_err(|e| Status::internal(format!("Failed to get variable definitions: {}", e)))?;
+
+        let discrete_definitions = discipline
+            .get_discrete_variable_definitions()
+            .map_err(|e| {
+                Status::internal(format!(
+                    "Failed to get discrete variable definitions: {}",
+                    e
+                ))
+            })?;
+
+        var_definitions.extend(discrete_definitions);
 
         let stream = tokio_stream::iter(var_definitions.into_iter().map(Ok).collect::<Vec<_>>());
 
@@ -306,12 +332,62 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
             .map(|(name, subname)| PartialsMetaData {
                 name,
                 subname,
-                shape: vec![], // Shape will be calculated later
+                shape: vec![],
             })
             .collect();
 
         let stream = tokio_stream::iter(partials_meta.into_iter().map(Ok).collect::<Vec<_>>());
 
         Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn set_variable_shapes(
+        &self,
+        request: Request<Streaming<VariableMetaData>>,
+    ) -> std::result::Result<Response<()>, Status> {
+        self.log_if_verbose("SetVariableShapes called").await;
+
+        let mut stream = request.into_inner();
+        while let Some(_var_meta) = stream.next().await {
+            // Dynamic shape resolution: update stored variable metadata
+            // For now, acknowledge the shapes without modifying internal state
+            // since the discipline handles its own variable definitions
+        }
+
+        Ok(Response::new(()))
+    }
+}
+
+fn convert_proto_struct_to_json(
+    s: &prost_types::Struct,
+) -> HashMap<String, serde_json::Value> {
+    let mut map = HashMap::new();
+    for (key, value) in &s.fields {
+        map.insert(key.clone(), convert_proto_value_to_json(value));
+    }
+    map
+}
+
+fn convert_proto_value_to_json(v: &prost_types::Value) -> serde_json::Value {
+    use prost_types::value::Kind;
+    match &v.kind {
+        Some(Kind::NullValue(_)) => serde_json::Value::Null,
+        Some(Kind::NumberValue(n)) => serde_json::json!(*n),
+        Some(Kind::StringValue(s)) => serde_json::Value::String(s.clone()),
+        Some(Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
+        Some(Kind::StructValue(s)) => {
+            let map: serde_json::Map<String, serde_json::Value> = s
+                .fields
+                .iter()
+                .map(|(k, v)| (k.clone(), convert_proto_value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+        Some(Kind::ListValue(list)) => {
+            let arr: Vec<serde_json::Value> =
+                list.values.iter().map(convert_proto_value_to_json).collect();
+            serde_json::Value::Array(arr)
+        }
+        None => serde_json::Value::Null,
     }
 }

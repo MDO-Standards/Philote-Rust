@@ -1,15 +1,19 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::philote_info::{explicit_service_server::ExplicitService, Array, VariableType};
+use crate::philote_info::{
+    explicit_service_server::ExplicitService, variable_message::Payload, Array, DiscreteVariable,
+    VariableMessage, VariableType,
+};
 use crate::server::base::DisciplineServer;
 use crate::traits::ExplicitDiscipline;
-use crate::types::ArrayData;
+use crate::types::{ArrayChunker, ArrayData};
 use crate::utils::chunk_arrays_for_streaming;
-use crate::{ArrayMap, PartialMap};
+use crate::{ArrayMap, DiscreteMap, PartialMap};
 
 pub struct ExplicitServer<D: ExplicitDiscipline + 'static> {
     base: DisciplineServer<D>,
@@ -37,25 +41,44 @@ impl<D: ExplicitDiscipline + 'static> ExplicitServer<D> {
         }
     }
 
-    async fn stream_arrays_as_chunks(
+    async fn stream_outputs_as_variable_messages(
         &self,
         arrays: &ArrayMap,
         var_type: VariableType,
-    ) -> Pin<Box<dyn Stream<Item = std::result::Result<Array, Status>> + Send>> {
+        discrete_outputs: &DiscreteMap,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<VariableMessage, Status>> + Send>> {
         let stream_options = self.base.stream_options().read().await;
         let chunk_size = stream_options.max_double_per_slice;
         drop(stream_options);
 
         let chunks = chunk_arrays_for_streaming(arrays, var_type, chunk_size);
-        let array_stream = chunks.into_iter().map(|chunk| Ok(Array::from(chunk)));
 
-        Box::pin(tokio_stream::iter(array_stream))
+        let mut messages: Vec<std::result::Result<VariableMessage, Status>> = chunks
+            .into_iter()
+            .map(|chunk| {
+                Ok(VariableMessage {
+                    payload: Some(Payload::Continuous(Array::from(chunk))),
+                })
+            })
+            .collect();
+
+        for (name, value) in discrete_outputs {
+            messages.push(Ok(VariableMessage {
+                payload: Some(Payload::Discrete(DiscreteVariable {
+                    name: name.clone(),
+                    r#type: VariableType::KDiscreteOutput.into(),
+                    value: Some(value.clone()),
+                })),
+            }));
+        }
+
+        Box::pin(tokio_stream::iter(messages))
     }
 
-    async fn stream_partials_as_chunks(
+    async fn stream_partials_as_variable_messages(
         &self,
         partials: &PartialMap,
-    ) -> Pin<Box<dyn Stream<Item = std::result::Result<Array, Status>> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<VariableMessage, Status>> + Send>> {
         let stream_options = self.base.stream_options().read().await;
         let chunk_size = stream_options.max_double_per_slice;
         drop(stream_options);
@@ -64,13 +87,9 @@ impl<D: ExplicitDiscipline + 'static> ExplicitServer<D> {
 
         for ((func_name, var_name), array) in partials {
             let flat_data = crate::utils::create_flattened_view(array);
-            let array_chunks = crate::types::ArrayChunker::new(chunk_size).chunk_array(
-                func_name,
-                &flat_data,
-                VariableType::KPartial,
-            );
+            let array_chunks =
+                ArrayChunker::new(chunk_size).chunk_array(func_name, &flat_data, VariableType::KPartial);
 
-            // Set the subname for partials
             let partial_chunks: Vec<ArrayData> = array_chunks
                 .into_iter()
                 .map(|mut chunk| {
@@ -82,49 +101,46 @@ impl<D: ExplicitDiscipline + 'static> ExplicitServer<D> {
             chunks.extend(partial_chunks);
         }
 
-        let array_stream = chunks.into_iter().map(|chunk| Ok(Array::from(chunk)));
+        let messages: Vec<std::result::Result<VariableMessage, Status>> = chunks
+            .into_iter()
+            .map(|chunk| {
+                Ok(VariableMessage {
+                    payload: Some(Payload::Continuous(Array::from(chunk))),
+                })
+            })
+            .collect();
 
-        Box::pin(tokio_stream::iter(array_stream))
+        Box::pin(tokio_stream::iter(messages))
     }
 }
 
 #[tonic::async_trait]
 impl<D: ExplicitDiscipline + 'static> ExplicitService for ExplicitServer<D> {
     type ComputeFunctionStream =
-        Pin<Box<dyn Stream<Item = std::result::Result<Array, Status>> + Send>>;
+        Pin<Box<dyn Stream<Item = std::result::Result<VariableMessage, Status>> + Send>>;
 
     async fn compute_function(
         &self,
-        request: Request<Streaming<Array>>,
+        request: Request<Streaming<VariableMessage>>,
     ) -> std::result::Result<Response<Self::ComputeFunctionStream>, Status> {
         self.log_if_verbose("ComputeFunction called").await;
 
-        // Preallocate input arrays
         let (mut inputs, mut flat_inputs) = self
             .base
             .preallocate_inputs()
             .await
             .map_err(|e| Status::internal(format!("Failed to preallocate inputs: {}", e)))?;
 
-        // Process input stream
+        let mut discrete_inputs: DiscreteMap = HashMap::new();
+
         let input_stream = request.into_inner();
         self.base
-            .process_input_stream(input_stream, &mut flat_inputs, None)
+            .process_variable_message_stream(input_stream, &mut flat_inputs, None, &mut discrete_inputs)
             .await
             .map_err(|e| Status::internal(format!("Failed to process input stream: {}", e)))?;
 
-        // Reconstruct arrays from flat data
         for (name, flat_data) in flat_inputs {
             if let Some(array) = inputs.get_mut(&name) {
-                if flat_data.len() != array.len() {
-                    return Err(Status::internal(format!(
-                        "Size mismatch for variable {}: expected {}, got {}",
-                        name,
-                        array.len(),
-                        flat_data.len()
-                    )));
-                }
-
                 for (i, &value) in flat_data.iter().enumerate() {
                     if let Some(elem) = array.get_mut(i) {
                         *elem = value;
@@ -133,57 +149,56 @@ impl<D: ExplicitDiscipline + 'static> ExplicitService for ExplicitServer<D> {
             }
         }
 
-        // Call the compute function
         let discipline = self.base.discipline().read().await;
-        let outputs = discipline
-            .compute(&inputs)
-            .await
-            .map_err(|e| Status::internal(format!("Compute failed: {}", e)))?;
+        let has_discrete = !discrete_inputs.is_empty()
+            || !discipline.get_discrete_variable_definitions().unwrap_or_default().is_empty();
+
+        let (outputs, discrete_outputs) = if has_discrete {
+            discipline
+                .compute_with_discrete(&inputs, &discrete_inputs)
+                .await
+                .map_err(|e| Status::internal(format!("Compute failed: {}", e)))?
+        } else {
+            let outputs = discipline
+                .compute(&inputs)
+                .await
+                .map_err(|e| Status::internal(format!("Compute failed: {}", e)))?;
+            (outputs, HashMap::new())
+        };
         drop(discipline);
 
-        // Stream outputs back to client
         let output_stream = self
-            .stream_arrays_as_chunks(&outputs, VariableType::KOutput)
+            .stream_outputs_as_variable_messages(&outputs, VariableType::KOutput, &discrete_outputs)
             .await;
 
         Ok(Response::new(output_stream))
     }
 
     type ComputeGradientStream =
-        Pin<Box<dyn Stream<Item = std::result::Result<Array, Status>> + Send>>;
+        Pin<Box<dyn Stream<Item = std::result::Result<VariableMessage, Status>> + Send>>;
 
     async fn compute_gradient(
         &self,
-        request: Request<Streaming<Array>>,
+        request: Request<Streaming<VariableMessage>>,
     ) -> std::result::Result<Response<Self::ComputeGradientStream>, Status> {
         self.log_if_verbose("ComputeGradient called").await;
 
-        // Preallocate input arrays
         let (mut inputs, mut flat_inputs) = self
             .base
             .preallocate_inputs()
             .await
             .map_err(|e| Status::internal(format!("Failed to preallocate inputs: {}", e)))?;
 
-        // Process input stream
+        let mut discrete_inputs: DiscreteMap = HashMap::new();
+
         let input_stream = request.into_inner();
         self.base
-            .process_input_stream(input_stream, &mut flat_inputs, None)
+            .process_variable_message_stream(input_stream, &mut flat_inputs, None, &mut discrete_inputs)
             .await
             .map_err(|e| Status::internal(format!("Failed to process input stream: {}", e)))?;
 
-        // Reconstruct arrays from flat data
         for (name, flat_data) in flat_inputs {
             if let Some(array) = inputs.get_mut(&name) {
-                if flat_data.len() != array.len() {
-                    return Err(Status::internal(format!(
-                        "Size mismatch for variable {}: expected {}, got {}",
-                        name,
-                        array.len(),
-                        flat_data.len()
-                    )));
-                }
-
                 for (i, &value) in flat_data.iter().enumerate() {
                     if let Some(elem) = array.get_mut(i) {
                         *elem = value;
@@ -192,22 +207,29 @@ impl<D: ExplicitDiscipline + 'static> ExplicitService for ExplicitServer<D> {
             }
         }
 
-        // Call the compute_partials function
         let discipline = self.base.discipline().read().await;
-        let partials = discipline
-            .compute_partials(&inputs)
-            .await
-            .map_err(|e| Status::internal(format!("Compute partials failed: {}", e)))?;
+        let has_discrete = !discrete_inputs.is_empty()
+            || !discipline.get_discrete_variable_definitions().unwrap_or_default().is_empty();
+
+        let partials = if has_discrete {
+            discipline
+                .compute_partials_with_discrete(&inputs, &discrete_inputs)
+                .await
+                .map_err(|e| Status::internal(format!("Compute partials failed: {}", e)))?
+        } else {
+            discipline
+                .compute_partials(&inputs)
+                .await
+                .map_err(|e| Status::internal(format!("Compute partials failed: {}", e)))?
+        };
         drop(discipline);
 
-        // Stream partials back to client
-        let partial_stream = self.stream_partials_as_chunks(&partials).await;
+        let partial_stream = self.stream_partials_as_variable_messages(&partials).await;
 
         Ok(Response::new(partial_stream))
     }
 }
 
-// Delegate DisciplineService methods to the base server
 #[tonic::async_trait]
 impl<D: ExplicitDiscipline + 'static>
     crate::philote_info::discipline_service_server::DisciplineService for ExplicitServer<D>
@@ -260,5 +282,12 @@ impl<D: ExplicitDiscipline + 'static>
         request: Request<()>,
     ) -> std::result::Result<Response<Self::GetPartialDefinitionsStream>, Status> {
         self.base.get_partial_definitions(request).await
+    }
+
+    async fn set_variable_shapes(
+        &self,
+        request: Request<Streaming<crate::philote_info::VariableMetaData>>,
+    ) -> std::result::Result<Response<()>, Status> {
+        self.base.set_variable_shapes(request).await
     }
 }

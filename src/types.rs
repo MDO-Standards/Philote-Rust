@@ -165,14 +165,12 @@ impl TryFrom<Array> for ArrayData {
 #[derive(Debug, Clone, Copy)]
 pub struct StreamOptions {
     pub max_double_per_slice: usize,
-    pub max_int_per_slice: usize,
 }
 
 impl Default for StreamOptions {
     fn default() -> Self {
         Self {
             max_double_per_slice: 1000,
-            max_int_per_slice: 1000,
         }
     }
 }
@@ -181,7 +179,6 @@ impl From<crate::philote_info::StreamOptions> for StreamOptions {
     fn from(opts: crate::philote_info::StreamOptions) -> Self {
         Self {
             max_double_per_slice: opts.num_double as usize,
-            max_int_per_slice: 1000, // Default since it's not in the proto
         }
     }
 }
@@ -447,14 +444,12 @@ mod tests {
     fn test_stream_options_default() {
         let opts = StreamOptions::default();
         assert_eq!(opts.max_double_per_slice, 1000);
-        assert_eq!(opts.max_int_per_slice, 1000);
     }
 
     #[test]
     fn test_stream_options_to_proto() {
         let opts = StreamOptions {
             max_double_per_slice: 500,
-            max_int_per_slice: 250,
         };
         let proto: crate::philote_info::StreamOptions = opts.into();
         assert_eq!(proto.num_double, 500);
@@ -465,7 +460,6 @@ mod tests {
         let proto = crate::philote_info::StreamOptions { num_double: 750 };
         let opts: StreamOptions = proto.into();
         assert_eq!(opts.max_double_per_slice, 750);
-        assert_eq!(opts.max_int_per_slice, 1000); // Default
     }
 
     #[test]

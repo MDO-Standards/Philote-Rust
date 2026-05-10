@@ -2,7 +2,7 @@
 // These tests verify that different modules work together correctly
 
 use ndarray::ArrayD;
-use philote::{ArrayMap, PhiloteError, Result};
+use philote::{ArrayMap, PhiloteError};
 use std::collections::HashMap;
 
 #[test]
@@ -59,12 +59,14 @@ fn test_variable_metadata_workflow() {
             r#type: VariableType::KInput as i32,
             shape: vec![3],
             units: "m".to_string(),
+            dynamic_shape: false,
         },
         VariableMetaData {
             name: "y".to_string(),
             r#type: VariableType::KOutput as i32,
             shape: vec![2, 2],
             units: "kg".to_string(),
+            dynamic_shape: false,
         },
     ];
 
@@ -90,18 +92,21 @@ fn test_partial_derivatives_workflow() {
             r#type: VariableType::KOutput as i32,
             shape: vec![1],
             units: "".to_string(),
+            dynamic_shape: false,
         },
         VariableMetaData {
             name: "x".to_string(),
             r#type: VariableType::KInput as i32,
             shape: vec![1],
             units: "".to_string(),
+            dynamic_shape: false,
         },
         VariableMetaData {
             name: "y".to_string(),
             r#type: VariableType::KInput as i32,
             shape: vec![1],
             units: "".to_string(),
+            dynamic_shape: false,
         },
     ];
 
@@ -120,7 +125,7 @@ fn test_partial_derivatives_workflow() {
 
 #[test]
 fn test_error_propagation() {
-    use philote::philote_info::{Array, VariableType};
+    use philote::philote_info::Array;
     use philote::types::ArrayData;
 
     // Test that invalid data is properly rejected
@@ -147,7 +152,6 @@ fn test_stream_options_roundtrip() {
 
     let opts = StreamOptions {
         max_double_per_slice: 500,
-        max_int_per_slice: 250,
     };
 
     // Convert to proto and back

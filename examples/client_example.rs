@@ -30,7 +30,6 @@ async fn main() -> Result<()> {
     // Configure streaming options
     let stream_options = StreamOptions {
         max_double_per_slice: 1000,
-        max_int_per_slice: 1000,
     };
     client = client.with_stream_options(stream_options);
 
@@ -191,6 +190,7 @@ pub async fn start_test_server() -> Result<()> {
                 name: name.to_string(),
                 shape: shape.iter().map(|&s| s as i64).collect(),
                 units: units.to_string(),
+                dynamic_shape: false,
             };
             self.variables.push(var_meta);
             Ok(())
@@ -202,6 +202,7 @@ pub async fn start_test_server() -> Result<()> {
                 name: name.to_string(),
                 shape: shape.iter().map(|&s| s as i64).collect(),
                 units: units.to_string(),
+                dynamic_shape: false,
             };
             self.variables.push(var_meta);
             Ok(())

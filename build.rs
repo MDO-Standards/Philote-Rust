@@ -1,6 +1,6 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::compile_protos("proto/data.proto")?;
-    tonic_build::compile_protos("proto/disciplines.proto")?;
+    tonic_build::configure()
+        .compile_protos(&["proto/data.proto", "proto/disciplines.proto"], &["proto"])?;
 
     Ok(())
 }
