@@ -358,9 +358,7 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
     }
 }
 
-fn convert_proto_struct_to_json(
-    s: &prost_types::Struct,
-) -> HashMap<String, serde_json::Value> {
+fn convert_proto_struct_to_json(s: &prost_types::Struct) -> HashMap<String, serde_json::Value> {
     let mut map = HashMap::new();
     for (key, value) in &s.fields {
         map.insert(key.clone(), convert_proto_value_to_json(value));
@@ -384,8 +382,11 @@ fn convert_proto_value_to_json(v: &prost_types::Value) -> serde_json::Value {
             serde_json::Value::Object(map)
         }
         Some(Kind::ListValue(list)) => {
-            let arr: Vec<serde_json::Value> =
-                list.values.iter().map(convert_proto_value_to_json).collect();
+            let arr: Vec<serde_json::Value> = list
+                .values
+                .iter()
+                .map(convert_proto_value_to_json)
+                .collect();
             serde_json::Value::Array(arr)
         }
         None => serde_json::Value::Null,

@@ -1,10 +1,30 @@
 [package]
-name = "philote"
+name = "philote-mdo"
 version = "0.1.0"
 edition = "2021"
+description = "A Rust library for building MDO analysis discipline servers using the Philote gRPC standard"
+license = "Apache-2.0"
+repository = "https://github.com/chrislupp/Philote-Rust"
+homepage = "https://github.com/chrislupp/Philote-Rust"
+documentation = "https://docs.rs/philote-mdo"
+readme = "README.md"
+keywords = ["mdo", "grpc", "engineering", "optimization", "multidisciplinary"]
+categories = ["science", "simulation"]
+include = [
+    "src/**/*",
+    "examples/**/*",
+    "tests/**/*",
+    "proto/data.proto",
+    "proto/disciplines.proto",
+    "build.rs",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+]
 
 [lib]
-name = "philote"
+name = "philote_mdo"
 path = "src/lib.rs"
 crate-type = ["rlib"]
 bench = false

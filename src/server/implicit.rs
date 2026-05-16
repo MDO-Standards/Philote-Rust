@@ -81,8 +81,11 @@ impl<D: ImplicitDiscipline + 'static> ImplicitServer<D> {
 
         for ((func_name, var_name), array) in partials {
             let flat_data = crate::utils::create_flattened_view(array);
-            let array_chunks =
-                ArrayChunker::new(chunk_size).chunk_array(func_name, &flat_data, VariableType::KPartial);
+            let array_chunks = ArrayChunker::new(chunk_size).chunk_array(
+                func_name,
+                &flat_data,
+                VariableType::KPartial,
+            );
 
             let partial_chunks: Vec<ArrayData> = array_chunks
                 .into_iter()
@@ -176,7 +179,10 @@ impl<D: ImplicitDiscipline + 'static> ImplicitService for ImplicitServer<D> {
 
         let discipline = self.base.discipline().read().await;
         let has_discrete = !discrete_inputs.is_empty()
-            || !discipline.get_discrete_variable_definitions().unwrap_or_default().is_empty();
+            || !discipline
+                .get_discrete_variable_definitions()
+                .unwrap_or_default()
+                .is_empty();
 
         let (residuals, discrete_outputs) = if has_discrete {
             discipline
@@ -193,7 +199,11 @@ impl<D: ImplicitDiscipline + 'static> ImplicitService for ImplicitServer<D> {
         drop(discipline);
 
         let residual_stream = self
-            .stream_outputs_as_variable_messages(&residuals, VariableType::KResidual, &discrete_outputs)
+            .stream_outputs_as_variable_messages(
+                &residuals,
+                VariableType::KResidual,
+                &discrete_outputs,
+            )
             .await;
 
         Ok(Response::new(residual_stream))
@@ -218,7 +228,12 @@ impl<D: ImplicitDiscipline + 'static> ImplicitService for ImplicitServer<D> {
 
         let input_stream = request.into_inner();
         self.base
-            .process_variable_message_stream(input_stream, &mut flat_inputs, None, &mut discrete_inputs)
+            .process_variable_message_stream(
+                input_stream,
+                &mut flat_inputs,
+                None,
+                &mut discrete_inputs,
+            )
             .await
             .map_err(|e| Status::internal(format!("Failed to process input stream: {}", e)))?;
 
@@ -234,7 +249,10 @@ impl<D: ImplicitDiscipline + 'static> ImplicitService for ImplicitServer<D> {
 
         let discipline = self.base.discipline().read().await;
         let has_discrete = !discrete_inputs.is_empty()
-            || !discipline.get_discrete_variable_definitions().unwrap_or_default().is_empty();
+            || !discipline
+                .get_discrete_variable_definitions()
+                .unwrap_or_default()
+                .is_empty();
 
         let (outputs, discrete_outputs) = if has_discrete {
             discipline
@@ -272,18 +290,25 @@ impl<D: ImplicitDiscipline + 'static> ImplicitService for ImplicitServer<D> {
 
         let discipline = self.base.discipline().read().await;
         let has_discrete = !discrete_inputs.is_empty()
-            || !discipline.get_discrete_variable_definitions().unwrap_or_default().is_empty();
+            || !discipline
+                .get_discrete_variable_definitions()
+                .unwrap_or_default()
+                .is_empty();
 
         let partials = if has_discrete {
             discipline
                 .residual_partials_with_discrete(&inputs, &outputs, &discrete_inputs)
                 .await
-                .map_err(|e| Status::internal(format!("Compute residual gradients failed: {}", e)))?
+                .map_err(|e| {
+                    Status::internal(format!("Compute residual gradients failed: {}", e))
+                })?
         } else {
             discipline
                 .residual_partials(&inputs, &outputs)
                 .await
-                .map_err(|e| Status::internal(format!("Compute residual gradients failed: {}", e)))?
+                .map_err(|e| {
+                    Status::internal(format!("Compute residual gradients failed: {}", e))
+                })?
         };
         drop(discipline);
 

@@ -21,9 +21,9 @@
 //! **Example:**
 //! ```rust
 //! use async_trait::async_trait;
-//! use philote::{traits::{Discipline, ExplicitDiscipline}, ArrayMap, Result};
+//! use philote_mdo::{traits::{Discipline, ExplicitDiscipline}, ArrayMap, Result};
 //! use std::collections::HashMap;
-//! # use philote::philote_info::VariableMetaData;
+//! # use philote_mdo::philote_info::VariableMetaData;
 //!
 //! struct SimpleAnalysis;
 //!

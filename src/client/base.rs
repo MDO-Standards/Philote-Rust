@@ -74,7 +74,10 @@ impl DisciplineClient {
     }
 
     pub async fn get_available_options(&mut self) -> Result<HashMap<String, String>> {
-        let response = self.client.get_available_options(self.make_request(())).await?;
+        let response = self
+            .client
+            .get_available_options(self.make_request(()))
+            .await?;
         let options_list = response.into_inner();
 
         let mut options_map = HashMap::new();
@@ -102,10 +105,7 @@ impl DisciplineClient {
         Ok(options_map)
     }
 
-    pub async fn set_options(
-        &mut self,
-        options: HashMap<String, serde_json::Value>,
-    ) -> Result<()> {
+    pub async fn set_options(&mut self, options: HashMap<String, serde_json::Value>) -> Result<()> {
         let fields: BTreeMap<String, prost_types::Value> = options
             .into_iter()
             .map(|(k, v)| (k, json_to_proto_value(&v)))

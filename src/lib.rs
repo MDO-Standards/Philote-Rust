@@ -24,7 +24,7 @@
 //!
 //! ```rust,no_run
 //! use async_trait::async_trait;
-//! use philote::{
+//! use philote_mdo::{
 //!     traits::{Discipline, ExplicitDiscipline},
 //!     server::ExplicitServer,
 //!     ArrayMap, Result,
@@ -53,7 +53,7 @@
 //! #   fn set_options(&mut self, _: &HashMap<String, serde_json::Value>) -> Result<()> { Ok(()) }
 //! #   fn setup(&mut self) -> Result<()> { Ok(()) }
 //! #   fn declare_partials(&mut self, _: &str, _: &str) -> Result<()> { Ok(()) }
-//! #   fn get_variable_definitions(&self) -> Result<Vec<philote::philote_info::VariableMetaData>> { Ok(vec![]) }
+//! #   fn get_variable_definitions(&self) -> Result<Vec<philote_mdo::philote_info::VariableMetaData>> { Ok(vec![]) }
 //! #   fn get_partials_definitions(&self) -> Result<Vec<(String, String)>> { Ok(vec![]) }
 //! #   fn get_available_options(&self) -> Result<HashMap<String, String>> { Ok(HashMap::new()) }
 //! }
@@ -62,9 +62,9 @@
 //! ## Connecting with a Client
 //!
 //! ```rust,no_run
-//! use philote::client::ExplicitClient;
+//! use philote_mdo::client::ExplicitClient;
 //!
-//! # async fn example() -> philote::Result<()> {
+//! # async fn example() -> philote_mdo::Result<()> {
 //! let mut client = ExplicitClient::connect("http://localhost:50051").await?;
 //! let info = client.get_info().await?;
 //! println!("Connected to: {} v{}", info.name, info.version);

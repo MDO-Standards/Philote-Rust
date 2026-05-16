@@ -137,7 +137,8 @@ impl ImplicitClient {
             .await?;
 
         let output_stream = response.into_inner();
-        self.process_variable_message_output_stream(output_stream).await
+        self.process_variable_message_output_stream(output_stream)
+            .await
     }
 
     pub async fn solve_residuals(&mut self, inputs: &ArrayMap) -> Result<ArrayMap> {
@@ -161,7 +162,8 @@ impl ImplicitClient {
             .await?;
 
         let output_stream = response.into_inner();
-        self.process_variable_message_output_stream(output_stream).await
+        self.process_variable_message_output_stream(output_stream)
+            .await
     }
 
     pub async fn compute_residual_gradients(
@@ -311,15 +313,12 @@ impl ImplicitClient {
 
         while let Some(msg) = stream.next().await {
             let var_msg = msg?;
-            match var_msg.payload {
-                Some(Payload::Continuous(array)) => {
-                    let array_data = ArrayData::try_from(array)?;
-                    if let Some(subname) = &array_data.subname {
-                        let key = (array_data.name.clone(), subname.clone());
-                        partial_chunks.entry(key).or_default().push(array_data);
-                    }
+            if let Some(Payload::Continuous(array)) = var_msg.payload {
+                let array_data = ArrayData::try_from(array)?;
+                if let Some(subname) = &array_data.subname {
+                    let key = (array_data.name.clone(), subname.clone());
+                    partial_chunks.entry(key).or_default().push(array_data);
                 }
-                _ => {}
             }
         }
 

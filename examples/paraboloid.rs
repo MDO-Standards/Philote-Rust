@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use ndarray::ArrayD;
 use std::collections::HashMap;
 
-use philote::{
+use philote_mdo::{
     philote_info::{VariableMetaData, VariableType},
     server::ExplicitServer,
     traits::{Discipline, ExplicitDiscipline},

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use tonic::transport::Server;
 
-use philote::{
+use philote_mdo::{
     philote_info::{
         discipline_service_server::DisciplineServiceServer,
         explicit_service_server::ExplicitServiceServer, VariableMetaData, VariableType,

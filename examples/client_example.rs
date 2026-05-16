@@ -1,7 +1,7 @@
 use ndarray::ArrayD;
 use std::collections::HashMap;
 
-use philote::{client::ExplicitClient, types::StreamOptions, ArrayMap, PhiloteError, Result};
+use philote_mdo::{client::ExplicitClient, types::StreamOptions, ArrayMap, PhiloteError, Result};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
 
 // Example of how to start a server for testing
 pub async fn start_test_server() -> Result<()> {
-    use philote::{
+    use philote_mdo::{
         philote_info::{VariableMetaData, VariableType},
         server::ExplicitServer,
         traits::{Discipline, ExplicitDiscipline},
@@ -269,7 +269,7 @@ pub async fn start_test_server() -> Result<()> {
             Ok(outputs)
         }
 
-        async fn compute_partials(&self, inputs: &ArrayMap) -> Result<philote::PartialMap> {
+        async fn compute_partials(&self, inputs: &ArrayMap) -> Result<philote_mdo::PartialMap> {
             let x = inputs
                 .get("x")
                 .ok_or_else(|| PhiloteError::VariableNotFound("x".to_string()))?;
@@ -310,7 +310,9 @@ pub async fn start_test_server() -> Result<()> {
 
     Server::builder()
         .add_service(
-            philote::philote_info::explicit_service_server::ExplicitServiceServer::new(server_impl),
+            philote_mdo::philote_info::explicit_service_server::ExplicitServiceServer::new(
+                server_impl,
+            ),
         )
         .serve(addr)
         .await

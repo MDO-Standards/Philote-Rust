@@ -2,7 +2,7 @@
 // These tests verify that different modules work together correctly
 
 use ndarray::ArrayD;
-use philote::{ArrayMap, PhiloteError};
+use philote_mdo::{ArrayMap, PhiloteError};
 use std::collections::HashMap;
 
 #[test]
@@ -19,17 +19,17 @@ fn test_end_to_end_array_serialization() {
     );
 
     // Verify we can flatten and work with the data
-    let flat_x = philote::utils::create_flattened_view(&arrays["x"]);
+    let flat_x = philote_mdo::utils::create_flattened_view(&arrays["x"]);
     assert_eq!(flat_x, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let flat_y = philote::utils::create_flattened_view(&arrays["y"]);
+    let flat_y = philote_mdo::utils::create_flattened_view(&arrays["y"]);
     assert_eq!(flat_y, vec![10.0, 20.0, 30.0, 40.0]);
 }
 
 #[test]
 fn test_array_chunking_and_metadata() {
-    use philote::philote_info::VariableType;
-    use philote::types::ArrayChunker;
+    use philote_mdo::philote_info::VariableType;
+    use philote_mdo::types::ArrayChunker;
 
     let chunker = ArrayChunker::new(100);
     let data = vec![1.0; 250];
@@ -50,7 +50,7 @@ fn test_array_chunking_and_metadata() {
 
 #[test]
 fn test_variable_metadata_workflow() {
-    use philote::philote_info::{VariableMetaData, VariableType};
+    use philote_mdo::philote_info::{VariableMetaData, VariableType};
 
     // Create variable metadata as would be done in a discipline
     let meta = vec![
@@ -71,19 +71,19 @@ fn test_variable_metadata_workflow() {
     ];
 
     // Preallocate arrays from metadata
-    let arrays = philote::utils::preallocate_arrays(&meta, None).unwrap();
+    let arrays = philote_mdo::utils::preallocate_arrays(&meta, None).unwrap();
     assert_eq!(arrays.len(), 2);
     assert_eq!(arrays["x"].shape(), &[3]);
     assert_eq!(arrays["y"].shape(), &[2, 2]);
 
     // Validate shapes match
-    let validation = philote::utils::validate_array_shapes(&arrays, &meta);
+    let validation = philote_mdo::utils::validate_array_shapes(&arrays, &meta);
     assert!(validation.is_ok());
 }
 
 #[test]
 fn test_partial_derivatives_workflow() {
-    use philote::philote_info::{VariableMetaData, VariableType};
+    use philote_mdo::philote_info::{VariableMetaData, VariableType};
 
     // Set up variables for a simple function f(x, y) = x^2 + y
     let var_meta = vec![
@@ -117,7 +117,7 @@ fn test_partial_derivatives_workflow() {
     ];
 
     // Preallocate partial derivative arrays
-    let partials = philote::utils::preallocate_partials(&var_meta, &partials_meta).unwrap();
+    let partials = philote_mdo::utils::preallocate_partials(&var_meta, &partials_meta).unwrap();
     assert_eq!(partials.len(), 2);
     assert!(partials.contains_key(&("f".to_string(), "x".to_string())));
     assert!(partials.contains_key(&("f".to_string(), "y".to_string())));
@@ -125,8 +125,8 @@ fn test_partial_derivatives_workflow() {
 
 #[test]
 fn test_error_propagation() {
-    use philote::philote_info::Array;
-    use philote::types::ArrayData;
+    use philote_mdo::philote_info::Array;
+    use philote_mdo::types::ArrayData;
 
     // Test that invalid data is properly rejected
     let invalid_proto = Array {
@@ -148,14 +148,14 @@ fn test_error_propagation() {
 
 #[test]
 fn test_stream_options_roundtrip() {
-    use philote::types::StreamOptions;
+    use philote_mdo::types::StreamOptions;
 
     let opts = StreamOptions {
         max_double_per_slice: 500,
     };
 
     // Convert to proto and back
-    let proto: philote::philote_info::StreamOptions = opts.into();
+    let proto: philote_mdo::philote_info::StreamOptions = opts.into();
     let opts2: StreamOptions = proto.into();
 
     assert_eq!(opts2.max_double_per_slice, 500);

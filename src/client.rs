@@ -12,9 +12,9 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use philote::client::ExplicitClient;
+//! use philote_mdo::client::ExplicitClient;
 //!
-//! # async fn example() -> philote::Result<()> {
+//! # async fn example() -> philote_mdo::Result<()> {
 //! // Connect to a Philote server
 //! let mut client = ExplicitClient::connect("http://localhost:50051").await?;
 //!
