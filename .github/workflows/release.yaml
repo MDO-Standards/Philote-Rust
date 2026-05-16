@@ -1,0 +1,263 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    if: |
+      github.event.pull_request.merged == true &&
+      (contains(github.event.pull_request.labels.*.name, 'release') ||
+       contains(github.event.pull_request.labels.*.name, 'prerelease'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Generate ephemeral GPG key
+        run: |
+          cat > /tmp/gpg-key-params <<EOF
+          %no-protection
+          Key-Type: RSA
+          Key-Length: 4096
+          Subkey-Type: RSA
+          Subkey-Length: 4096
+          Name-Real: github-actions[bot]
+          Name-Email: 41898282+github-actions[bot]@users.noreply.github.com
+          Expire-Date: 1d
+          EOF
+          gpg --batch --gen-key /tmp/gpg-key-params
+          KEY_ID=$(gpg --list-secret-keys --keyid-format=long | grep sec | awk '{print $2}' | cut -d'/' -f2)
+          echo "GPG_KEY_ID=${KEY_ID}" >> "$GITHUB_ENV"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.signingkey "${KEY_ID}"
+          git config commit.gpgsign true
+          git config tag.gpgsign true
+
+      - name: Extract and validate labels
+        id: labels
+        run: |
+          LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
+
+          IS_RELEASE=$(echo "$LABELS" | jq 'contains(["release"])')
+          IS_PRERELEASE=$(echo "$LABELS" | jq 'contains(["prerelease"])')
+          IS_MAJOR=$(echo "$LABELS" | jq 'contains(["major"])')
+          IS_MINOR=$(echo "$LABELS" | jq 'contains(["minor"])')
+          IS_PATCH=$(echo "$LABELS" | jq 'contains(["patch"])')
+          IS_ALPHA=$(echo "$LABELS" | jq 'contains(["alpha"])')
+          IS_BETA=$(echo "$LABELS" | jq 'contains(["beta"])')
+          IS_RC=$(echo "$LABELS" | jq 'contains(["rc"])')
+
+          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "is_major=$IS_MAJOR" >> $GITHUB_OUTPUT
+          echo "is_minor=$IS_MINOR" >> $GITHUB_OUTPUT
+          echo "is_patch=$IS_PATCH" >> $GITHUB_OUTPUT
+          echo "is_alpha=$IS_ALPHA" >> $GITHUB_OUTPUT
+          echo "is_beta=$IS_BETA" >> $GITHUB_OUTPUT
+          echo "is_rc=$IS_RC" >> $GITHUB_OUTPUT
+
+          # Validation
+          if [ "$IS_RELEASE" = "true" ] && [ "$IS_PRERELEASE" = "true" ]; then
+            echo "::error::Cannot have both 'release' and 'prerelease' labels"
+            exit 1
+          fi
+
+          BUMP_COUNT=0
+          [ "$IS_MAJOR" = "true" ] && BUMP_COUNT=$((BUMP_COUNT + 1))
+          [ "$IS_MINOR" = "true" ] && BUMP_COUNT=$((BUMP_COUNT + 1))
+          [ "$IS_PATCH" = "true" ] && BUMP_COUNT=$((BUMP_COUNT + 1))
+
+          if [ $BUMP_COUNT -ne 1 ]; then
+            echo "::error::Must have exactly one of 'major', 'minor', or 'patch' label"
+            exit 1
+          fi
+
+          PRE_COUNT=0
+          [ "$IS_ALPHA" = "true" ] && PRE_COUNT=$((PRE_COUNT + 1))
+          [ "$IS_BETA" = "true" ] && PRE_COUNT=$((PRE_COUNT + 1))
+          [ "$IS_RC" = "true" ] && PRE_COUNT=$((PRE_COUNT + 1))
+
+          if [ "$IS_PRERELEASE" = "true" ] && [ $PRE_COUNT -ne 1 ]; then
+            echo "::error::Prerelease must have exactly one of 'alpha', 'beta', or 'rc' label"
+            exit 1
+          fi
+
+          if [ "$IS_RELEASE" = "true" ] && [ $PRE_COUNT -gt 0 ]; then
+            echo "::error::Stable release cannot have prerelease type labels"
+            exit 1
+          fi
+
+      - name: Calculate new version
+        id: version
+        run: |
+          CURRENT_VERSION=$(grep -oP '^version\s*=\s*"\K[0-9]+\.[0-9]+\.[0-9]+' Cargo.toml | head -1)
+          echo "Current version: $CURRENT_VERSION"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          if [ "${{ steps.labels.outputs.is_major }}" = "true" ]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [ "${{ steps.labels.outputs.is_minor }}" = "true" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          elif [ "${{ steps.labels.outputs.is_patch }}" = "true" ]; then
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+
+          if [ "${{ steps.labels.outputs.is_prerelease }}" = "true" ]; then
+            if [ "${{ steps.labels.outputs.is_alpha }}" = "true" ]; then
+              PRE_TYPE="alpha"
+            elif [ "${{ steps.labels.outputs.is_beta }}" = "true" ]; then
+              PRE_TYPE="beta"
+            elif [ "${{ steps.labels.outputs.is_rc }}" = "true" ]; then
+              PRE_TYPE="rc"
+            fi
+
+            EXISTING_TAGS=$(git tag -l "v${NEW_VERSION}-${PRE_TYPE}.*" | sort -V)
+            if [ -z "$EXISTING_TAGS" ]; then
+              PRE_NUMBER=1
+            else
+              LAST_TAG=$(echo "$EXISTING_TAGS" | tail -1)
+              PRE_NUMBER=$(echo "$LAST_TAG" | sed -E "s/.*-${PRE_TYPE}\.([0-9]+)/\1/")
+              PRE_NUMBER=$((PRE_NUMBER + 1))
+            fi
+
+            CARGO_VERSION="${NEW_VERSION}-${PRE_TYPE}.${PRE_NUMBER}"
+            TAG_VERSION="v${NEW_VERSION}-${PRE_TYPE}.${PRE_NUMBER}"
+          else
+            CARGO_VERSION="${NEW_VERSION}"
+            TAG_VERSION="v${NEW_VERSION}"
+          fi
+
+          echo "New version: $CARGO_VERSION"
+          echo "Tag: $TAG_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "cargo_version=$CARGO_VERSION" >> $GITHUB_OUTPUT
+          echo "tag_version=$TAG_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update Cargo.toml version
+        run: |
+          CARGO_VERSION="${{ steps.version.outputs.cargo_version }}"
+          sed -i 's/^version\s*=\s*"[^"]*"/version = "'"$CARGO_VERSION"'"/' Cargo.toml
+          echo "Updated Cargo.toml:"
+          grep '^version' Cargo.toml
+
+      - name: Update CHANGELOG.md
+        run: |
+          TAG="${{ steps.version.outputs.tag_version }}"
+          CARGO_VERSION="${{ steps.version.outputs.cargo_version }}"
+          DATE=$(date +%Y-%m-%d)
+          REPO="https://github.com/chrislupp/Philote-Rust"
+
+          if [ "${{ steps.labels.outputs.is_prerelease }}" = "true" ]; then
+            if grep -q "## \[Unreleased\]" CHANGELOG.md; then
+              awk -v ver="$CARGO_VERSION" -v date="$DATE" '
+                /## \[Unreleased\]/ { print; print ""; print "## [" ver "] - " date; next }
+                { print }
+              ' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+            fi
+          else
+            awk -v ver="$CARGO_VERSION" -v date="$DATE" '
+              /## \[Unreleased\]/ { print "## [" ver "] - " date; next }
+              { print }
+            ' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+
+            awk '
+              /^## \[/ && !inserted { print "## [Unreleased]"; print ""; inserted=1 }
+              { print }
+            ' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+          fi
+
+          # Update comparison links
+          if [ "${{ steps.labels.outputs.is_prerelease }}" = "true" ]; then
+            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              PREV_TAG="${PREV_TAG#v}"
+              echo "[${CARGO_VERSION}]: ${REPO}/compare/v${PREV_TAG}...${TAG}" >> CHANGELOG.md
+            else
+              echo "[${CARGO_VERSION}]: ${REPO}/releases/tag/${TAG}" >> CHANGELOG.md
+            fi
+          else
+            sed -i '/^\[Unreleased\]:/d' CHANGELOG.md
+            echo "[Unreleased]: ${REPO}/compare/${TAG}...develop" >> CHANGELOG.md
+
+            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              echo "[${CARGO_VERSION}]: ${REPO}/compare/${PREV_TAG}...${TAG}" >> CHANGELOG.md
+            else
+              echo "[${CARGO_VERSION}]: ${REPO}/releases/tag/${TAG}" >> CHANGELOG.md
+            fi
+          fi
+
+      - name: Commit and push changes
+        run: |
+          git add -A
+          git commit -S -m "chore: release version ${{ steps.version.outputs.cargo_version }}"
+          git push origin main
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ steps.version.outputs.tag_version }}"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Extract changelog
+        id: changelog
+        run: |
+          CARGO_VERSION="${{ steps.version.outputs.cargo_version }}"
+          awk -v ver="$CARGO_VERSION" '
+            BEGIN { found=0 }
+            $0 ~ "## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag_version }}
+          name: ${{ steps.version.outputs.tag_version }}
+          body_path: /tmp/release-notes.md
+          draft: false
+          prerelease: ${{ steps.labels.outputs.is_prerelease == 'true' }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Merge main back to develop
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          git fetch origin develop
+          git checkout develop
+
+          if git merge main --no-edit; then
+            git push origin develop
+            echo "Successfully merged main back to develop"
+          else
+            git merge --abort
+            echo "::warning::Auto-merge failed. Creating PR for manual resolution."
+            gh pr create \
+              --base develop \
+              --head main \
+              --title "chore: merge release ${{ steps.version.outputs.tag_version }} back to develop" \
+              --body "Automatic merge of release changes back to develop failed due to conflicts. Please resolve manually."
+          fi

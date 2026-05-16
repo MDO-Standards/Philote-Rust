@@ -27,7 +27,7 @@
 //! # Example
 //!
 //! ```rust
-//! use philote::PhiloteError;
+//! use philote_mdo::PhiloteError;
 //!
 //! fn find_variable(name: &str) -> Result<f64, PhiloteError> {
 //!     if name == "x" {
@@ -84,6 +84,9 @@ pub enum PhiloteError {
 
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
+
+    #[error("Operation cancelled")]
+    Cancelled,
 }
 
 impl PhiloteError {

@@ -14,8 +14,8 @@
 //! # Example
 //!
 //! ```rust
-//! use philote::utils::preallocate_arrays;
-//! use philote::philote_info::{VariableMetaData, VariableType};
+//! use philote_mdo::utils::preallocate_arrays;
+//! use philote_mdo::philote_info::{VariableMetaData, VariableType};
 //!
 //! let var_meta = vec![
 //!     VariableMetaData {
@@ -23,6 +23,7 @@
 //!         r#type: VariableType::KInput as i32,
 //!         shape: vec![3],
 //!         units: "m".to_string(),
+//!         dynamic_shape: false,
 //!     },
 //! ];
 //!
@@ -264,12 +265,14 @@ mod tests {
                 r#type: VariableType::KInput as i32,
                 shape: vec![2, 3],
                 units: "m".to_string(),
+                dynamic_shape: false,
             },
             VariableMetaData {
                 name: "y".to_string(),
                 r#type: VariableType::KOutput as i32,
                 shape: vec![3],
                 units: "kg".to_string(),
+                dynamic_shape: false,
             },
         ];
         let arrays = preallocate_arrays(&meta, None).unwrap();
@@ -286,12 +289,14 @@ mod tests {
                 r#type: VariableType::KInput as i32,
                 shape: vec![2],
                 units: "".to_string(),
+                dynamic_shape: false,
             },
             VariableMetaData {
                 name: "y".to_string(),
                 r#type: VariableType::KOutput as i32,
                 shape: vec![3],
                 units: "".to_string(),
+                dynamic_shape: false,
             },
         ];
         let arrays = preallocate_arrays(&meta, Some(VariableType::KInput)).unwrap();
@@ -307,6 +312,7 @@ mod tests {
             r#type: 999, // Invalid type
             shape: vec![2],
             units: "".to_string(),
+            dynamic_shape: false,
         }];
         let result = preallocate_arrays(&meta, None);
         assert!(result.is_err());
@@ -324,12 +330,14 @@ mod tests {
                 r#type: VariableType::KOutput as i32,
                 shape: vec![1],
                 units: "".to_string(),
+                dynamic_shape: false,
             },
             VariableMetaData {
                 name: "x".to_string(),
                 r#type: VariableType::KInput as i32,
                 shape: vec![1],
                 units: "".to_string(),
+                dynamic_shape: false,
             },
         ];
         let partials_meta = vec![("f".to_string(), "x".to_string())];
@@ -346,12 +354,14 @@ mod tests {
                 r#type: VariableType::KOutput as i32,
                 shape: vec![3],
                 units: "".to_string(),
+                dynamic_shape: false,
             },
             VariableMetaData {
                 name: "x".to_string(),
                 r#type: VariableType::KInput as i32,
                 shape: vec![2],
                 units: "".to_string(),
+                dynamic_shape: false,
             },
         ];
         let partials_meta = vec![("f".to_string(), "x".to_string())];
@@ -370,6 +380,7 @@ mod tests {
             r#type: VariableType::KOutput as i32,
             shape: vec![1],
             units: "".to_string(),
+            dynamic_shape: false,
         }];
         let partials_meta = vec![("f".to_string(), "x".to_string())];
         let result = preallocate_partials(&var_meta, &partials_meta);
@@ -422,12 +433,14 @@ mod tests {
                 r#type: VariableType::KInput as i32,
                 shape: vec![2, 3],
                 units: "".to_string(),
+                dynamic_shape: false,
             },
             VariableMetaData {
                 name: "y".to_string(),
                 r#type: VariableType::KOutput as i32,
                 shape: vec![4],
                 units: "".to_string(),
+                dynamic_shape: false,
             },
         ];
         let result = validate_array_shapes(&arrays, &meta);
@@ -443,6 +456,7 @@ mod tests {
             r#type: VariableType::KInput as i32,
             shape: vec![3, 2], // Wrong shape
             units: "".to_string(),
+            dynamic_shape: false,
         }];
         let result = validate_array_shapes(&arrays, &meta);
         assert!(result.is_err());

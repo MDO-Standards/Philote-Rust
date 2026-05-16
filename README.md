@@ -62,7 +62,7 @@ Here's a simple example of creating an explicit discipline that computes a parab
 use async_trait::async_trait;
 use ndarray::ArrayD;
 use std::collections::HashMap;
-use philote::{
+use philote_mdo::{
     traits::{Discipline, ExplicitDiscipline},
     server::ExplicitServer,
     ArrayMap, PartialMap, Result,
@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
 Connect to and interact with a Philote server:
 
 ```rust
-use philote::client::ExplicitClient;
+use philote_mdo::client::ExplicitClient;
 use ndarray::ArrayD;
 
 #[tokio::main]

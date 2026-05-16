@@ -12,14 +12,14 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use philote::server::ExplicitServer;
-//! use philote::traits::{Discipline, ExplicitDiscipline};
+//! use philote_mdo::server::ExplicitServer;
+//! use philote_mdo::traits::{Discipline, ExplicitDiscipline};
 //! use async_trait::async_trait;
 //! use std::net::SocketAddr;
 //! use tonic::transport::Server;
-//! # use philote::{ArrayMap, Result};
+//! # use philote_mdo::{ArrayMap, Result};
 //! # use std::collections::HashMap;
-//! # use philote::philote_info::{VariableMetaData, explicit_service_server::ExplicitServiceServer};
+//! # use philote_mdo::philote_info::{VariableMetaData, explicit_service_server::ExplicitServiceServer};
 //!
 //! # struct MyDiscipline;
 //! # #[async_trait]

@@ -21,9 +21,9 @@
 //! **Example:**
 //! ```rust
 //! use async_trait::async_trait;
-//! use philote::{traits::{Discipline, ExplicitDiscipline}, ArrayMap, Result};
+//! use philote_mdo::{traits::{Discipline, ExplicitDiscipline}, ArrayMap, Result};
 //! use std::collections::HashMap;
-//! # use philote::philote_info::VariableMetaData;
+//! # use philote_mdo::philote_info::VariableMetaData;
 //!
 //! struct SimpleAnalysis;
 //!
@@ -73,7 +73,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 
 use crate::philote_info::{DisciplineProperties, VariableMetaData, VariableType};
-use crate::{ArrayMap, PartialMap, PhiloteError, Result};
+use crate::{ArrayMap, DiscreteMap, PartialMap, PhiloteError, Result};
 
 /// Base trait for all computational disciplines
 ///
@@ -187,6 +187,22 @@ pub trait Discipline: Send + Sync {
         Ok(())
     }
 
+    fn configure(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn add_discrete_input(&mut self, _name: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn add_discrete_output(&mut self, _name: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_discrete_variable_definitions(&self) -> Result<Vec<VariableMetaData>> {
+        Ok(vec![])
+    }
+
     /// Declare a partial derivative of an output with respect to an input
     ///
     /// # Arguments
@@ -259,6 +275,23 @@ pub trait ExplicitDiscipline: Discipline {
     /// Returns a "not implemented" error. Override to provide analytical gradients.
     async fn compute_partials(&self, _inputs: &ArrayMap) -> Result<PartialMap> {
         Err(PhiloteError::not_implemented("compute_partials"))
+    }
+
+    async fn compute_with_discrete(
+        &self,
+        inputs: &ArrayMap,
+        _discrete_inputs: &DiscreteMap,
+    ) -> Result<(ArrayMap, DiscreteMap)> {
+        let outputs = self.compute(inputs).await?;
+        Ok((outputs, std::collections::HashMap::new()))
+    }
+
+    async fn compute_partials_with_discrete(
+        &self,
+        inputs: &ArrayMap,
+        _discrete_inputs: &DiscreteMap,
+    ) -> Result<PartialMap> {
+        self.compute_partials(inputs).await
     }
 }
 
@@ -351,6 +384,34 @@ pub trait ImplicitDiscipline: Discipline {
     ) -> Result<ArrayMap> {
         Err(PhiloteError::not_implemented("apply_linear"))
     }
+
+    async fn compute_residuals_with_discrete(
+        &self,
+        inputs: &ArrayMap,
+        outputs: &ArrayMap,
+        _discrete_inputs: &DiscreteMap,
+    ) -> Result<(ArrayMap, DiscreteMap)> {
+        let residuals = self.compute_residuals(inputs, outputs).await?;
+        Ok((residuals, std::collections::HashMap::new()))
+    }
+
+    async fn solve_residuals_with_discrete(
+        &self,
+        inputs: &ArrayMap,
+        _discrete_inputs: &DiscreteMap,
+    ) -> Result<(ArrayMap, DiscreteMap)> {
+        let outputs = self.solve_residuals(inputs).await?;
+        Ok((outputs, std::collections::HashMap::new()))
+    }
+
+    async fn residual_partials_with_discrete(
+        &self,
+        inputs: &ArrayMap,
+        outputs: &ArrayMap,
+        _discrete_inputs: &DiscreteMap,
+    ) -> Result<PartialMap> {
+        self.residual_partials(inputs, outputs).await
+    }
 }
 
 /// Helper struct for variable metadata
@@ -366,6 +427,7 @@ pub struct VariableInfo {
     pub shape: Vec<usize>,
     /// Physical units
     pub units: String,
+    pub dynamic_shape: bool,
 }
 
 impl VariableInfo {
@@ -376,6 +438,7 @@ impl VariableInfo {
             var_type,
             shape,
             units,
+            dynamic_shape: false,
         }
     }
 
@@ -407,6 +470,7 @@ impl From<VariableInfo> for VariableMetaData {
             name: info.name,
             shape: info.shape.into_iter().map(|s| s as i64).collect(),
             units: info.units,
+            dynamic_shape: info.dynamic_shape,
         }
     }
 }
