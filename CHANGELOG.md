@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-16
+
 ### Added
 
 - Async gRPC-based discipline server and client implementation
@@ -16,4 +18,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive error handling with domain-specific error types
 - Paraboloid example discipline
 
-[Unreleased]: https://github.com/chrislupp/Philote-Rust/commits/develop
+[Unreleased]: https://github.com/chrislupp/Philote-Rust/compare/v0.1.0...develop
+[0.1.0]: https://github.com/chrislupp/Philote-Rust/releases/tag/v0.1.0
