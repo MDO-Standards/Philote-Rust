@@ -8,8 +8,10 @@
 //!
 //! - **Array manipulation**: [`create_flattened_view`], [`get_flattened_view_mut`]
 //! - **Memory allocation**: [`preallocate_arrays`], [`preallocate_partials`]
-//! - **Validation**: `validate_array_shapes`, `validate_variable_names`
-//! - **Streaming**: `collect_streamed_arrays`, `collect_streamed_partials`
+//! - **Shape rules**: [`calculate_partial_shape`]
+//! - **Validation**: [`validate_array_shapes`]
+//!
+//! Chunk encoding and decoding for variable streams lives in [`crate::wire`].
 //!
 //! # Example
 //!
@@ -35,7 +37,6 @@ use ndarray::{ArrayD, ArrayViewMutD};
 use std::collections::HashMap;
 
 use crate::philote_info::{VariableMetaData, VariableType};
-use crate::types::{ArrayChunker, ArrayData};
 use crate::{ArrayMap, PartialMap, PhiloteError, Result};
 
 pub fn create_flattened_view(array: &ArrayD<f64>) -> Vec<f64> {
@@ -103,7 +104,11 @@ pub fn preallocate_partials(
     Ok(partials)
 }
 
-fn calculate_partial_shape(func_shape: &[usize], var_shape: &[usize]) -> Vec<usize> {
+/// Derive the shape of a partial derivative from its function and variable shapes.
+///
+/// A scalar on either side is absorbed rather than producing a length-1 axis;
+/// otherwise the shapes are concatenated. This matches Philote-Python.
+pub fn calculate_partial_shape(func_shape: &[usize], var_shape: &[usize]) -> Vec<usize> {
     match (func_shape, var_shape) {
         // Both scalar
         ([1], [1]) => vec![1],
@@ -118,44 +123,6 @@ fn calculate_partial_shape(func_shape: &[usize], var_shape: &[usize]) -> Vec<usi
             shape
         }
     }
-}
-
-pub fn chunk_arrays_for_streaming(
-    arrays: &ArrayMap,
-    var_type: VariableType,
-    chunk_size: usize,
-) -> Vec<ArrayData> {
-    let chunker = ArrayChunker::new(chunk_size);
-    let mut all_chunks = Vec::new();
-
-    for (name, array) in arrays {
-        let flat_data = create_flattened_view(array);
-        let chunks = chunker.chunk_array(name, &flat_data, var_type);
-        all_chunks.extend(chunks);
-    }
-
-    all_chunks
-}
-
-pub fn reassemble_arrays_from_chunks(chunks: &[ArrayData]) -> Result<ArrayMap> {
-    let mut array_data: HashMap<String, (Vec<f64>, Vec<usize>)> = HashMap::new();
-
-    // Group chunks by array name and collect data
-    for chunk in chunks {
-        let entry = array_data.entry(chunk.name.clone()).or_default();
-
-        // Extend the data vector
-        entry.0.extend(&chunk.data);
-
-        // For now, we assume shape information comes from elsewhere
-        // This is a simplification - in practice, we'd need to track shapes
-    }
-
-    // This is incomplete - we need shape information to properly reconstruct arrays
-    // For now, return an error indicating this needs to be implemented
-    Err(PhiloteError::not_implemented(
-        "reassemble_arrays_from_chunks",
-    ))
 }
 
 pub fn validate_array_shapes(arrays: &ArrayMap, expected_meta: &[VariableMetaData]) -> Result<()> {
@@ -401,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn test_chunk_arrays_for_streaming() {
+    fn test_chunk_arrays_across_multiple_variables() {
         let mut arrays = HashMap::new();
         arrays.insert(
             "x".to_string(),
@@ -411,7 +378,7 @@ mod tests {
             "y".to_string(),
             ArrayD::from_shape_vec(vec![4], vec![10.0, 20.0, 30.0, 40.0]).unwrap(),
         );
-        let chunks = chunk_arrays_for_streaming(&arrays, VariableType::KInput, 3);
+        let chunks = crate::wire::chunk_arrays(&arrays, VariableType::KInput, 3);
         // x: 6 elements / 3 per chunk = 2 chunks
         // y: 4 elements / 3 per chunk = 2 chunks (3 + 1)
         // Total: 4 chunks

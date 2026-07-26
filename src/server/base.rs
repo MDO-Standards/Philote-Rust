@@ -1,19 +1,19 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::discrete::struct_to_json_map;
 use crate::philote_info::{
-    discipline_service_server::DisciplineService, variable_message::Payload, DataType,
-    DisciplineOptions, DisciplineProperties, OptionsList, PartialsMetaData,
-    StreamOptions as ProtoStreamOptions, VariableMessage, VariableMetaData, VariableType,
+    discipline_service_server::DisciplineService, DataType, DisciplineOptions,
+    DisciplineProperties, OptionsList, PartialsMetaData, StreamOptions as ProtoStreamOptions,
+    VariableMessage, VariableMetaData, VariableType,
 };
 use crate::traits::Discipline;
-use crate::types::{ArrayData, StreamOptions};
-use crate::utils::preallocate_arrays;
-use crate::{ArrayMap, DiscreteMap, PhiloteError, Result};
+use crate::types::StreamOptions;
+use crate::utils::{calculate_partial_shape, preallocate_arrays};
+use crate::{wire, ArrayMap, DiscreteMap, PhiloteError, Result};
 
+/// Serves the `DisciplineService` RPCs shared by explicit and implicit disciplines.
 pub struct DisciplineServer<D: Discipline + 'static> {
     discipline: Arc<RwLock<D>>,
     stream_options: Arc<RwLock<StreamOptions>>,
@@ -21,7 +21,15 @@ pub struct DisciplineServer<D: Discipline + 'static> {
 }
 
 impl<D: Discipline + 'static> DisciplineServer<D> {
-    pub fn new(discipline: D) -> Self {
+    /// Wrap a discipline for serving.
+    ///
+    /// Runs [`initialize`](Discipline::initialize) so options declared there are
+    /// advertised even when the discipline was built with `#[derive(Default)]`.
+    /// `Setup` deliberately preserves the option list, so this happens once.
+    pub fn new(mut discipline: D) -> Self {
+        if let Err(err) = discipline.initialize() {
+            tracing::warn!("discipline initialize() failed: {err}");
+        }
         Self {
             discipline: Arc::new(RwLock::new(discipline)),
             stream_options: Arc::new(RwLock::new(StreamOptions::default())),
@@ -42,7 +50,7 @@ impl<D: Discipline + 'static> DisciplineServer<D> {
         }
     }
 
-    async fn log_if_verbose(&self, message: &str) {
+    pub(crate) async fn log_if_verbose(&self, message: &str) {
         if self.verbose {
             tracing::info!("{}", message);
         }
@@ -60,111 +68,66 @@ impl<D: Discipline + 'static> DisciplineServer<D> {
         self.verbose
     }
 
-    pub async fn preallocate_inputs(&self) -> Result<(ArrayMap, HashMap<String, Vec<f64>>)> {
-        let discipline = self.discipline.read().await;
-        let var_definitions = discipline.get_variable_definitions()?;
-
-        let inputs = preallocate_arrays(&var_definitions, Some(VariableType::KInput))?;
-        let flat_inputs: HashMap<String, Vec<f64>> = inputs
-            .iter()
-            .map(|(name, array)| (name.clone(), crate::utils::create_flattened_view(array)))
-            .collect();
-
-        Ok((inputs, flat_inputs))
+    /// The configured maximum number of doubles per chunk.
+    pub(crate) async fn chunk_size(&self) -> usize {
+        self.stream_options.read().await.max_double_per_slice
     }
 
-    pub async fn preallocate_outputs(&self) -> Result<(ArrayMap, HashMap<String, Vec<f64>>)> {
-        let discipline = self.discipline.read().await;
-        let var_definitions = discipline.get_variable_definitions()?;
-
-        let outputs = preallocate_arrays(&var_definitions, Some(VariableType::KOutput))?;
-        let flat_outputs: HashMap<String, Vec<f64>> = outputs
-            .iter()
-            .map(|(name, array)| (name.clone(), crate::utils::create_flattened_view(array)))
-            .collect();
-
-        Ok((outputs, flat_outputs))
+    /// Whether the discipline declared any discrete variables.
+    pub(crate) async fn has_discrete(&self) -> bool {
+        !self
+            .discipline
+            .read()
+            .await
+            .registry()
+            .discrete_meta()
+            .is_empty()
     }
 
+    /// Discrete inputs seeded with their declared defaults.
+    pub(crate) async fn seeded_discrete_inputs(&self) -> DiscreteMap {
+        self.discipline
+            .read()
+            .await
+            .registry()
+            .discrete_input_defaults()
+    }
+
+    fn preallocate(&self, discipline: &D, var_type: VariableType) -> Result<ArrayMap> {
+        discipline.registry().assert_shapes_resolved()?;
+        preallocate_arrays(discipline.registry().var_meta(), Some(var_type))
+    }
+
+    /// Allocate zeroed arrays for every declared input.
+    pub async fn preallocate_inputs(&self) -> Result<ArrayMap> {
+        let discipline = self.discipline.read().await;
+        self.preallocate(&discipline, VariableType::KInput)
+    }
+
+    /// Allocate zeroed arrays for every declared output.
+    pub async fn preallocate_outputs(&self) -> Result<ArrayMap> {
+        let discipline = self.discipline.read().await;
+        self.preallocate(&discipline, VariableType::KOutput)
+    }
+
+    /// Allocate zeroed arrays for every declared partial.
     pub async fn preallocate_partials(&self) -> Result<crate::PartialMap> {
         let discipline = self.discipline.read().await;
-        let var_definitions = discipline.get_variable_definitions()?;
-        let partial_definitions = discipline.get_partials_definitions()?;
-
-        crate::utils::preallocate_partials(&var_definitions, &partial_definitions)
+        crate::utils::preallocate_partials(
+            discipline.registry().var_meta(),
+            discipline.registry().partials_meta(),
+        )
     }
 
+    /// Read a request stream into preallocated input (and optionally output) maps.
     pub async fn process_variable_message_stream(
         &self,
         mut request_stream: Streaming<VariableMessage>,
-        flat_inputs: &mut HashMap<String, Vec<f64>>,
-        mut flat_outputs: Option<&mut HashMap<String, Vec<f64>>>,
+        inputs: &mut ArrayMap,
+        outputs: Option<&mut ArrayMap>,
         discrete_inputs: &mut DiscreteMap,
     ) -> Result<()> {
-        while let Some(msg) = request_stream.message().await? {
-            match msg.payload {
-                Some(Payload::Continuous(array)) => {
-                    let array_data = ArrayData::try_from(array)?;
-
-                    match array_data.var_type {
-                        VariableType::KInput => {
-                            if let Some(input_vec) = flat_inputs.get_mut(&array_data.name) {
-                                let start = array_data.start;
-                                let end = array_data.end;
-
-                                if end >= input_vec.len() {
-                                    return Err(PhiloteError::IndexOutOfBounds {
-                                        index: end,
-                                        size: input_vec.len(),
-                                    });
-                                }
-
-                                for (i, &value) in array_data.data.iter().enumerate() {
-                                    if start + i <= end && start + i < input_vec.len() {
-                                        input_vec[start + i] = value;
-                                    }
-                                }
-                            }
-                        }
-                        VariableType::KOutput => {
-                            if let Some(flat_outputs) = &mut flat_outputs {
-                                if let Some(output_vec) = flat_outputs.get_mut(&array_data.name) {
-                                    let start = array_data.start;
-                                    let end = array_data.end;
-
-                                    if end >= output_vec.len() {
-                                        return Err(PhiloteError::IndexOutOfBounds {
-                                            index: end,
-                                            size: output_vec.len(),
-                                        });
-                                    }
-
-                                    for (i, &value) in array_data.data.iter().enumerate() {
-                                        if start + i <= end && start + i < output_vec.len() {
-                                            output_vec[start + i] = value;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            return Err(PhiloteError::InvalidVariableType(format!(
-                                "Unexpected variable type in input stream: {:?}",
-                                array_data.var_type
-                            )));
-                        }
-                    }
-                }
-                Some(Payload::Discrete(discrete_var)) => {
-                    if let Some(value) = discrete_var.value {
-                        discrete_inputs.insert(discrete_var.name, value);
-                    }
-                }
-                None => {}
-            }
-        }
-
-        Ok(())
+        wire::receive_request_stream(&mut request_stream, inputs, outputs, discrete_inputs).await
     }
 }
 
@@ -177,9 +140,7 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         self.log_if_verbose("GetInfo called").await;
 
         let discipline = self.discipline.read().await;
-        let properties = discipline.get_properties();
-
-        Ok(Response::new(properties))
+        Ok(Response::new(discipline.get_properties()))
     }
 
     async fn set_stream_options(
@@ -189,10 +150,15 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         self.log_if_verbose("SetStreamOptions called").await;
 
         let proto_options = request.into_inner();
-        let stream_options = StreamOptions::from(proto_options);
+        if proto_options.num_double <= 0 {
+            return Err(Status::invalid_argument(format!(
+                "SetStreamOptions: num_double must be positive, got {}",
+                proto_options.num_double
+            )));
+        }
 
         let mut options = self.stream_options.write().await;
-        *options = stream_options;
+        *options = StreamOptions::from(proto_options);
 
         Ok(Response::new(()))
     }
@@ -204,39 +170,35 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         self.log_if_verbose("GetAvailableOptions called").await;
 
         let discipline = self.discipline.read().await;
-        let options_map = discipline
-            .get_available_options()
-            .map_err(|e| Status::internal(format!("Failed to get options: {}", e)))?;
+        let options_map = discipline.get_available_options().map_err(Status::from)?;
 
-        let mut options = Vec::new();
-        let mut types = Vec::new();
+        let mut options = Vec::with_capacity(options_map.len());
+        let mut types = Vec::with_capacity(options_map.len());
 
         for (name, type_str) in options_map {
-            options.push(name);
-
             let data_type = match type_str.as_str() {
                 "bool" => DataType::KBool,
                 "int" => DataType::KInt,
+                // "double" is accepted as an alias for the canonical "float".
                 "float" | "double" => DataType::KDouble,
+                // "string" is accepted as an alias for the canonical "str".
                 "str" | "string" => DataType::KString,
-                "struct" => DataType::KStruct,
-                _ => {
+                // "struct" is accepted as an alias for the canonical "dict".
+                "dict" | "struct" => DataType::KStruct,
+                other => {
                     return Err(Status::invalid_argument(format!(
-                        "Invalid option type: {}",
-                        type_str
+                        "option '{name}' has invalid type '{other}'"
                     )))
                 }
             };
-
+            options.push(name);
             types.push(data_type.into());
         }
 
-        let options_list = OptionsList {
+        Ok(Response::new(OptionsList {
             options,
             r#type: types,
-        };
-
-        Ok(Response::new(options_list))
+        }))
     }
 
     async fn set_options(
@@ -245,18 +207,15 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
     ) -> std::result::Result<Response<()>, Status> {
         self.log_if_verbose("SetOptions called").await;
 
-        let options_proto = request.into_inner();
-
-        let options = if let Some(struct_val) = options_proto.options {
-            convert_proto_struct_to_json(&struct_val)
-        } else {
-            HashMap::new()
-        };
+        let options = request
+            .into_inner()
+            .options
+            .as_ref()
+            .map(struct_to_json_map)
+            .unwrap_or_default();
 
         let mut discipline = self.discipline.write().await;
-        discipline
-            .set_options(&options)
-            .map_err(|e| Status::internal(format!("Failed to set options: {}", e)))?;
+        discipline.set_options(&options).map_err(Status::from)?;
 
         Ok(Response::new(()))
     }
@@ -266,17 +225,13 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
 
         let mut discipline = self.discipline.write().await;
 
-        discipline
-            .configure()
-            .map_err(|e| Status::internal(format!("Configure failed: {}", e)))?;
+        // Drop metadata from any previous Setup so repeated calls do not accumulate
+        // duplicate definitions.
+        discipline.registry_mut().clear();
 
-        discipline
-            .setup()
-            .map_err(|e| Status::internal(format!("Setup failed: {}", e)))?;
-
-        discipline
-            .setup_partials()
-            .map_err(|e| Status::internal(format!("Setup partials failed: {}", e)))?;
+        discipline.configure().map_err(Status::from)?;
+        discipline.setup().map_err(Status::from)?;
+        discipline.setup_partials().map_err(Status::from)?;
 
         Ok(Response::new(()))
     }
@@ -292,23 +247,16 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         self.log_if_verbose("GetVariableDefinitions called").await;
 
         let discipline = self.discipline.read().await;
-        let mut var_definitions = discipline
+        let mut definitions = discipline
             .get_variable_definitions()
-            .map_err(|e| Status::internal(format!("Failed to get variable definitions: {}", e)))?;
+            .map_err(Status::from)?;
+        definitions.extend(
+            discipline
+                .get_discrete_variable_definitions()
+                .map_err(Status::from)?,
+        );
 
-        let discrete_definitions = discipline
-            .get_discrete_variable_definitions()
-            .map_err(|e| {
-                Status::internal(format!(
-                    "Failed to get discrete variable definitions: {}",
-                    e
-                ))
-            })?;
-
-        var_definitions.extend(discrete_definitions);
-
-        let stream = tokio_stream::iter(var_definitions.into_iter().map(Ok).collect::<Vec<_>>());
-
+        let stream = tokio_stream::iter(definitions.into_iter().map(Ok).collect::<Vec<_>>());
         Ok(Response::new(Box::pin(stream)))
     }
 
@@ -323,21 +271,41 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         self.log_if_verbose("GetPartialDefinitions called").await;
 
         let discipline = self.discipline.read().await;
-        let partial_definitions = discipline
-            .get_partials_definitions()
-            .map_err(|e| Status::internal(format!("Failed to get partial definitions: {}", e)))?;
+        let var_meta = discipline.registry().var_meta();
 
-        let partials_meta: Vec<PartialsMetaData> = partial_definitions
+        let shape_of = |name: &str| -> Option<Vec<usize>> {
+            var_meta
+                .iter()
+                .find(|v| v.name == name)
+                .map(|v| v.shape.iter().map(|&d| d as usize).collect())
+        };
+
+        let partials_meta: Vec<PartialsMetaData> = discipline
+            .get_partials_definitions()
+            .map_err(Status::from)?
             .into_iter()
-            .map(|(name, subname)| PartialsMetaData {
-                name,
-                subname,
-                shape: vec![],
+            .map(|(name, subname)| {
+                // Report the derived shape when both variables are known. Philote-Python
+                // always leaves this empty and lets the client derive it; sending it is
+                // additive and harmless to clients that ignore it.
+                let shape = match (shape_of(&name), shape_of(&subname)) {
+                    (Some(func), Some(var)) if !func.is_empty() && !var.is_empty() => {
+                        calculate_partial_shape(&func, &var)
+                            .into_iter()
+                            .map(|d| d as i64)
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
+                PartialsMetaData {
+                    name,
+                    subname,
+                    shape,
+                }
             })
             .collect();
 
         let stream = tokio_stream::iter(partials_meta.into_iter().map(Ok).collect::<Vec<_>>());
-
         Ok(Response::new(Box::pin(stream)))
     }
 
@@ -348,47 +316,22 @@ impl<D: Discipline + 'static> DisciplineService for DisciplineServer<D> {
         self.log_if_verbose("SetVariableShapes called").await;
 
         let mut stream = request.into_inner();
-        while let Some(_var_meta) = stream.next().await {
-            // Dynamic shape resolution: update stored variable metadata
-            // For now, acknowledge the shapes without modifying internal state
-            // since the discipline handles its own variable definitions
+        let mut discipline = self.discipline.write().await;
+
+        while let Some(meta) = stream.message().await? {
+            let var_type = VariableType::try_from(meta.r#type).map_err(|_| {
+                PhiloteError::InvalidVariableType(format!(
+                    "SetVariableShapes: invalid type {} for '{}'",
+                    meta.r#type, meta.name
+                ))
+            })?;
+            let shape: Vec<usize> = meta.shape.iter().map(|&d| d as usize).collect();
+
+            discipline
+                .set_variable_shape(&meta.name, var_type, &shape)
+                .map_err(Status::from)?;
         }
 
         Ok(Response::new(()))
-    }
-}
-
-fn convert_proto_struct_to_json(s: &prost_types::Struct) -> HashMap<String, serde_json::Value> {
-    let mut map = HashMap::new();
-    for (key, value) in &s.fields {
-        map.insert(key.clone(), convert_proto_value_to_json(value));
-    }
-    map
-}
-
-fn convert_proto_value_to_json(v: &prost_types::Value) -> serde_json::Value {
-    use prost_types::value::Kind;
-    match &v.kind {
-        Some(Kind::NullValue(_)) => serde_json::Value::Null,
-        Some(Kind::NumberValue(n)) => serde_json::json!(*n),
-        Some(Kind::StringValue(s)) => serde_json::Value::String(s.clone()),
-        Some(Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
-        Some(Kind::StructValue(s)) => {
-            let map: serde_json::Map<String, serde_json::Value> = s
-                .fields
-                .iter()
-                .map(|(k, v)| (k.clone(), convert_proto_value_to_json(v)))
-                .collect();
-            serde_json::Value::Object(map)
-        }
-        Some(Kind::ListValue(list)) => {
-            let arr: Vec<serde_json::Value> = list
-                .values
-                .iter()
-                .map(convert_proto_value_to_json)
-                .collect();
-            serde_json::Value::Array(arr)
-        }
-        None => serde_json::Value::Null,
     }
 }

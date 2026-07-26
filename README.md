@@ -1,8 +1,5 @@
-[![Build](https://github.com/chrislupp/Philote-Rust/actions/workflows/build.yml/badge.svg)](https://github.com/chrislupp/Philote-Rust/actions/workflows/build.yml)
-[![Test](https://github.com/chrislupp/Philote-Rust/actions/workflows/test.yml/badge.svg)](https://github.com/chrislupp/Philote-Rust/actions/workflows/test.yml)
-[![Clippy](https://github.com/chrislupp/Philote-Rust/actions/workflows/clippy.yml/badge.svg)](https://github.com/chrislupp/Philote-Rust/actions/workflows/clippy.yml)
-[![Format Check](https://github.com/chrislupp/Philote-Rust/actions/workflows/fmt.yml/badge.svg)](https://github.com/chrislupp/Philote-Rust/actions/workflows/fmt.yml)
-[![codecov](https://codecov.io/gh/chrislupp/Philote-Rust/branch/main/graph/badge.svg)](https://codecov.io/gh/chrislupp/Philote-Rust)
+[![Tests](https://github.com/MDO-Standards/Philote-Rust/actions/workflows/tests.yaml/badge.svg)](https://github.com/MDO-Standards/Philote-Rust/actions/workflows/tests.yaml)
+[![codecov](https://codecov.io/gh/MDO-Standards/Philote-Rust/branch/main/graph/badge.svg)](https://codecov.io/gh/MDO-Standards/Philote-Rust)
 
 <div align="center">
 <img src="https://github.com/MDO-Standards/Philote-MDO/blob/main/doc/graphics/logos/philote.svg?raw=true" width="500">
@@ -23,10 +20,32 @@ Philote-Rust provides a high-performance, type-safe implementation for creating 
 - **Flexible discipline types**:
   - Explicit disciplines (direct input-output mappings)
   - Implicit disciplines (residual-based formulations)
-- **Automatic gradient computation** support
-- **Efficient array streaming** for large data transfers
+- **Analytic gradients** for both discipline types
+- **Discrete variables** alongside continuous arrays
+- **Client-resolved shapes** for disciplines sized at runtime
+- **N-dimensional arrays**, chunked and streamed for large transfers
 - **Comprehensive error handling** with custom error types
-- **Zero-copy views** for performance-critical operations
+
+### Interoperability
+
+This crate implements the [Philote-MDO standard](https://github.com/MDO-Standards/Philote-MDO)
+(v0.8.0), so its clients and servers interoperate with other implementations of
+the standard. Verified against Philote-Python: a Rust client drives a Python
+paraboloid server and vice versa, with identical results.
+
+Two caveats when talking to Philote-Python specifically:
+
+- Its `GetInfo` RPC is implemented as a generator although the proto declares it
+  unary, so the call fails with `Failed to serialize response!` for *any* client,
+  including Python's own. Avoid `get_info` against a Python server.
+- Its **implicit** server emits an exclusive `Array.end` while its explicit server
+  and both of its clients use an inclusive one. This crate follows the standard
+  (inclusive) everywhere, so a Rust client cannot decode responses from a Python
+  implicit server until that is fixed upstream. The reverse direction — a Python
+  client against a Rust implicit server — works correctly.
+
+Both are upstream defects in Philote-Python, not divergences introduced here; see
+`tests/interop_notes.rs`.
 
 ## Installation
 
@@ -34,7 +53,7 @@ Add Philote to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-philote = { git = "https://github.com/chrislupp/Philote-Rust.git" }
+philote-mdo = { git = "https://github.com/MDO-Standards/Philote-Rust.git" }
 ```
 
 ### Prerequisites
@@ -56,20 +75,49 @@ brew install protobuf
 
 ### Creating a Discipline Server
 
-Here's a simple example of creating an explicit discipline that computes a paraboloid function:
+Here's an explicit discipline that computes a paraboloid function, served over
+gRPC. A discipline stores its metadata in a `VariableRegistry`, so it only supplies
+the two accessors — via the `impl_registry!` macro — plus the hooks it needs.
 
 ```rust
 use async_trait::async_trait;
 use ndarray::ArrayD;
 use std::collections::HashMap;
+use std::sync::Arc;
 use philote_mdo::{
-    traits::{Discipline, ExplicitDiscipline},
+    impl_registry,
+    philote_info::{
+        discipline_service_server::DisciplineServiceServer,
+        explicit_service_server::ExplicitServiceServer,
+    },
+    registry::VariableRegistry,
     server::ExplicitServer,
-    ArrayMap, PartialMap, Result,
+    traits::{Discipline, ExplicitDiscipline},
+    ArrayMap, Result,
 };
+use tonic::transport::Server;
 
+#[derive(Default)]
 struct Paraboloid {
-    // Your discipline state
+    registry: VariableRegistry,
+}
+
+impl Discipline for Paraboloid {
+    impl_registry!(registry);
+
+    fn name(&self) -> &str { "Paraboloid" }
+    fn provides_gradients(&self) -> bool { true }
+
+    fn setup(&mut self) -> Result<()> {
+        self.add_input("x", &[1], "m")?;
+        self.add_input("y", &[1], "m")?;
+        self.add_output("f_xy", &[1], "m**2")
+    }
+
+    fn setup_partials(&mut self) -> Result<()> {
+        self.declare_partials("f_xy", "x")?;
+        self.declare_partials("f_xy", "y")
+    }
 }
 
 #[async_trait]
@@ -82,17 +130,22 @@ impl ExplicitDiscipline for Paraboloid {
         let f = (x - 3.0).powi(2) + x * y + (y + 4.0).powi(2) - 3.0;
 
         let mut outputs = HashMap::new();
-        outputs.insert("f".to_string(), ArrayD::from_elem(vec![1], f));
+        outputs.insert("f_xy".to_string(), ArrayD::from_elem(vec![1], f));
         Ok(outputs)
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let discipline = Paraboloid::new();
-    let server = ExplicitServer::new(discipline);
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // One instance backs both services.
+    let server = Arc::new(ExplicitServer::new(Paraboloid::default()));
 
-    // Server is now ready to handle gRPC requests
+    Server::builder()
+        .add_service(DisciplineServiceServer::from_arc(server.clone()))
+        .add_service(ExplicitServiceServer::from_arc(server))
+        .serve("127.0.0.1:50051".parse()?)
+        .await?;
+
     Ok(())
 }
 ```
@@ -104,24 +157,30 @@ Connect to and interact with a Philote server:
 ```rust
 use philote_mdo::client::ExplicitClient;
 use ndarray::ArrayD;
+use std::collections::HashMap;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // Connect to the server
+async fn main() -> philote_mdo::Result<()> {
     let mut client = ExplicitClient::connect("http://localhost:50051").await?;
 
-    // Get discipline information
     let info = client.get_info().await?;
     println!("Connected to: {} v{}", info.name, info.version);
 
-    // Prepare inputs
+    // Run setup and fetch metadata before computing: array responses carry only a
+    // flat index range, so the declared shapes are what restore their dimensions.
+    client.setup().await?;
+    client.get_variable_definitions().await?;
+    client.get_partial_definitions().await?;
+
     let mut inputs = HashMap::new();
     inputs.insert("x".to_string(), ArrayD::from_elem(vec![1], 2.0));
     inputs.insert("y".to_string(), ArrayD::from_elem(vec![1], -1.0));
 
-    // Compute outputs
-    let outputs = client.compute(inputs).await?;
-    println!("Result: f = {}", outputs["f"][[0]]);
+    let outputs = client.compute_function(&inputs).await?;
+    println!("Result: f_xy = {}", outputs["f_xy"][[0]]);
+
+    let partials = client.compute_gradient(&inputs).await?;
+    println!("df/dx = {}", partials[&("f_xy".to_string(), "x".to_string())][[0]]);
 
     Ok(())
 }
@@ -129,15 +188,25 @@ async fn main() -> Result<()> {
 
 ## Examples
 
-The repository includes several complete examples:
+Ready-made disciplines live in `philote_mdo::examples`: `Paraboloid`,
+`Rosenbrock` (integer `dimension` option), `QuadraticImplicit` (implicit, with
+`apply_linear`), and `FlexibleDiscipline` (client-resolved shapes). They mirror
+Philote-Python's `philote_mdo/examples/`, so results compare directly.
 
-- **paraboloid.rs** - Simple explicit discipline demonstrating core functionality
-- **server_runner.rs** - Full gRPC server setup with connection handling
-- **client_example.rs** - Client usage patterns and error handling
+Runnable binaries in `examples/`:
 
-Run an example:
+| Example | Description |
+| --- | --- |
+| `paraboloid` | Runs the paraboloid locally, no server |
+| `paraboloid_server` / `paraboloid_client` | Explicit discipline over gRPC |
+| `quadratic_implicit` / `quadratic_client` | Implicit discipline over gRPC |
+| `server_runner` / `client_example` | Full walkthrough, including options and chunked streaming |
+
+Start a server and drive it from a second terminal:
+
 ```bash
-cargo run --example paraboloid
+cargo run --example paraboloid_server
+cargo run --example paraboloid_client
 ```
 
 ## Architecture
@@ -149,6 +218,10 @@ cargo run --example paraboloid
   - `ExplicitDiscipline` - For direct input-output mappings
   - `ImplicitDiscipline` - For residual-based formulations
 
+- **Registry** (`registry.rs`) - `VariableRegistry`, the metadata store backing
+  every discipline. Owning this centrally is what makes shape resolution,
+  duplicate detection, residual twins, and re-`Setup` clearing possible.
+
 - **Server** (`server/`) - gRPC server implementations
   - `ExplicitServer` - Serves explicit disciplines
   - `ImplicitServer` - Serves implicit disciplines
@@ -157,8 +230,12 @@ cargo run --example paraboloid
   - `ExplicitClient` - Connects to explicit discipline servers
   - `ImplicitClient` - Connects to implicit discipline servers
 
+- **Wire** (`wire.rs`) - Chunk encoding and decoding, shared by client and server
+- **Discrete** (`discrete.rs`) - JSON ↔ protobuf `Value` conversions
+- **Validation** (`validation.rs`) - Input validation helpers
 - **Types** (`types.rs`) - Core data structures and conversions
 - **Utils** (`utils.rs`) - Helper functions for array operations
+- **Examples** (`examples/`) - Ready-to-run example disciplines
 
 ### Data Flow
 
@@ -210,17 +287,22 @@ cargo clippy -- -D warnings
 ```
 philote-rust/
 ├── src/
-│   ├── client/          # Client implementations
-│   ├── server/          # Server implementations
+│   ├── client/         # Client implementations
+│   ├── server/         # Server implementations
+│   ├── examples/       # Example disciplines
 │   ├── lib.rs          # Library entry point
 │   ├── traits.rs       # Core trait definitions
+│   ├── registry.rs     # Variable and option metadata store
+│   ├── wire.rs         # Chunk encoding and decoding
+│   ├── discrete.rs     # JSON <-> protobuf Value conversions
+│   ├── validation.rs   # Input validation
 │   ├── types.rs        # Data structures
 │   ├── error.rs        # Error types
 │   └── utils.rs        # Utility functions
-├── examples/           # Usage examples
-├── tests/             # Integration tests
-├── proto/             # Protocol buffer definitions (submodule)
-└── Cargo.toml         # Package manifest
+├── examples/           # Runnable example binaries
+├── tests/              # Integration tests
+├── proto/              # Protocol buffer definitions (submodule)
+└── Cargo.toml          # Package manifest
 ```
 
 ## Contributing

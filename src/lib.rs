@@ -10,56 +10,63 @@
 //! be integrated into MDO frameworks. It supports both explicit and implicit analysis
 //! types with automatic gradient computation capabilities.
 //!
-//! # Key Features
+//! It implements the [Philote-MDO standard](https://github.com/MDO-Standards/Philote-MDO),
+//! so disciplines and clients interoperate with the other implementations of the
+//! standard, including Philote-Python.
+//!
+//! # Key features
 //!
 //! - **Type-safe gRPC communication** using Protocol Buffers
-//! - **Async/await support** with Tokio runtime for high-performance concurrent operations
-//! - **Flexible discipline types** for different analysis patterns
-//! - **Efficient data streaming** for large arrays
-//! - **Comprehensive error handling** with domain-specific error types
+//! - **Async/await support** with the Tokio runtime
+//! - **Explicit and implicit disciplines**, with analytic gradients
+//! - **Discrete variables** alongside continuous arrays
+//! - **Client-resolved shapes** for disciplines sized at runtime
+//! - **Chunked streaming** of large arrays
 //!
-//! # Quick Start
+//! # Quick start
 //!
-//! ## Creating a Discipline Server
+//! ## Defining a discipline
 //!
-//! ```rust,no_run
+//! Metadata lives in a [`VariableRegistry`](registry::VariableRegistry), so an
+//! implementation supplies the two accessors — via [`impl_registry!`] — plus the
+//! lifecycle hooks it needs.
+//!
+//! ```rust
 //! use async_trait::async_trait;
 //! use philote_mdo::{
+//!     impl_registry, registry::VariableRegistry,
 //!     traits::{Discipline, ExplicitDiscipline},
-//!     server::ExplicitServer,
 //!     ArrayMap, Result,
 //! };
-//! use ndarray::ArrayD;
 //! use std::collections::HashMap;
 //!
-//! struct MyDiscipline;
+//! #[derive(Default)]
+//! struct Doubler {
+//!     registry: VariableRegistry,
+//! }
 //!
-//! #[async_trait]
-//! impl ExplicitDiscipline for MyDiscipline {
-//!     async fn compute(&self, inputs: &ArrayMap) -> Result<ArrayMap> {
-//!         let mut outputs = HashMap::new();
-//!         // Your computation logic here
-//!         Ok(outputs)
+//! impl Discipline for Doubler {
+//!     impl_registry!(registry);
+//!
+//!     fn name(&self) -> &str { "Doubler" }
+//!
+//!     fn setup(&mut self) -> Result<()> {
+//!         self.add_input("x", &[3], "m")?;
+//!         self.add_output("y", &[3], "m")
 //!     }
 //! }
 //!
-//! impl Discipline for MyDiscipline {
-//!     fn name(&self) -> &str { "MyDiscipline" }
-//!     fn version(&self) -> &str { "1.0.0" }
-//!     // Implement other required methods...
-//! #   fn add_input(&mut self, _: &str, _: &[usize], _: &str) -> Result<()> { Ok(()) }
-//! #   fn add_output(&mut self, _: &str, _: &[usize], _: &str) -> Result<()> { Ok(()) }
-//! #   fn add_option(&mut self, _: &str, _: &str) -> Result<()> { Ok(()) }
-//! #   fn set_options(&mut self, _: &HashMap<String, serde_json::Value>) -> Result<()> { Ok(()) }
-//! #   fn setup(&mut self) -> Result<()> { Ok(()) }
-//! #   fn declare_partials(&mut self, _: &str, _: &str) -> Result<()> { Ok(()) }
-//! #   fn get_variable_definitions(&self) -> Result<Vec<philote_mdo::philote_info::VariableMetaData>> { Ok(vec![]) }
-//! #   fn get_partials_definitions(&self) -> Result<Vec<(String, String)>> { Ok(vec![]) }
-//! #   fn get_available_options(&self) -> Result<HashMap<String, String>> { Ok(HashMap::new()) }
+//! #[async_trait]
+//! impl ExplicitDiscipline for Doubler {
+//!     async fn compute(&self, inputs: &ArrayMap) -> Result<ArrayMap> {
+//!         let mut outputs = HashMap::new();
+//!         outputs.insert("y".to_string(), &inputs["x"] * 2.0);
+//!         Ok(outputs)
+//!     }
 //! }
 //! ```
 //!
-//! ## Connecting with a Client
+//! ## Connecting with a client
 //!
 //! ```rust,no_run
 //! use philote_mdo::client::ExplicitClient;
@@ -68,24 +75,35 @@
 //! let mut client = ExplicitClient::connect("http://localhost:50051").await?;
 //! let info = client.get_info().await?;
 //! println!("Connected to: {} v{}", info.name, info.version);
+//!
+//! // Required before computing: responses are decoded using the declared shapes.
+//! client.setup().await?;
+//! client.get_variable_definitions().await?;
+//! client.get_partial_definitions().await?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! # Module Organization
+//! # Module organization
 //!
-//! - [`client`] - Client implementations for connecting to Philote servers
-//! - [`server`] - Server implementations for hosting disciplines
-//! - [`traits`] - Core trait definitions for disciplines
-//! - [`types`] - Data structures and type conversions
-//! - [`error`] - Error types and handling
-//! - [`utils`] - Utility functions for array operations
+//! - [`client`] — clients for connecting to Philote servers
+//! - [`server`] — servers for hosting disciplines
+//! - [`traits`] — discipline trait definitions
+//! - [`registry`] — variable, partials, and option metadata storage
+//! - [`types`] — data structures and protobuf conversions
+//! - [`wire`] — chunk encoding and decoding for variable streams
+//! - [`discrete`] — JSON ↔ protobuf `Value` conversions
+//! - [`validation`] — input validation helpers
+//! - [`error`] — error types
+//! - [`utils`] — array helpers
+//! - [`examples`] — ready-to-run example disciplines
 //!
-//! # Type Aliases
+//! # Type aliases
 //!
-//! - [`Result<T>`](Result) - Standard result type using [`PhiloteError`]
-//! - [`ArrayMap`] - Map of variable names to N-dimensional arrays
-//! - [`PartialMap`] - Map of (output, input) tuples to partial derivative arrays
+//! - [`Result<T>`](Result) — standard result type using [`PhiloteError`]
+//! - [`ArrayMap`] — map of variable names to N-dimensional arrays
+//! - [`PartialMap`] — map of (output, input) pairs to partial derivative arrays
+//! - [`DiscreteMap`] — map of variable names to discrete values
 
 use ndarray::ArrayD;
 use std::collections::HashMap;
@@ -96,14 +114,20 @@ pub mod philote_info {
 }
 
 pub mod client;
+pub mod discrete;
 pub mod error;
+pub mod examples;
+pub mod registry;
 pub mod server;
 pub mod traits;
 pub mod types;
 pub mod utils;
+pub mod validation;
+pub mod wire;
 
 pub use error::PhiloteError;
-pub use traits::{Discipline, ExplicitDiscipline, ImplicitDiscipline};
+pub use registry::VariableRegistry;
+pub use traits::{Discipline, ExplicitDiscipline, ImplicitDiscipline, LinearMode};
 pub use types::{ArrayData, VariableData};
 
 /// Standard result type for Philote operations
@@ -115,4 +139,5 @@ pub type ArrayMap = HashMap<String, ArrayD<f64>>;
 /// Map of (output variable, input variable) pairs to their partial derivative arrays
 pub type PartialMap = HashMap<(String, String), ArrayD<f64>>;
 
+/// Map of discrete variable names to their values
 pub type DiscreteMap = HashMap<String, prost_types::Value>;

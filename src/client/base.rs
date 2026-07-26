@@ -1,19 +1,48 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::time::Duration;
 use tonic::transport::Channel;
 use tonic::Request;
 
+use crate::discrete::json_map_to_struct;
 use crate::philote_info::{
     discipline_service_client::DisciplineServiceClient, DisciplineOptions, DisciplineProperties,
-    PartialsMetaData, StreamOptions as ProtoStreamOptions, VariableMetaData,
+    PartialsMetaData, StreamOptions as ProtoStreamOptions, VariableMetaData, VariableType,
 };
 use crate::types::StreamOptions;
 use crate::{PhiloteError, Result};
 
+/// Build a [`VariableMetaData`] message for resolving a dynamic variable's shape.
+///
+/// Pass the result to [`DisciplineClient::send_variable_shapes`].
+pub fn variable_shape_meta(
+    name: &str,
+    shape: &[usize],
+    var_type: VariableType,
+) -> VariableMetaData {
+    VariableMetaData {
+        r#type: var_type.into(),
+        name: name.to_string(),
+        shape: shape.iter().map(|&d| d as i64).collect(),
+        units: String::new(),
+        dynamic_shape: true,
+    }
+}
+
+/// Client for the RPCs shared by explicit and implicit disciplines.
+///
+/// Variable and partials metadata fetched from the server is cached, because both
+/// are needed to reconstruct correctly shaped arrays from the flat chunk stream.
 pub struct DisciplineClient {
     client: DisciplineServiceClient<Channel>,
     stream_options: StreamOptions,
     rpc_timeout: Option<Duration>,
+    var_meta: Vec<VariableMetaData>,
+    discrete_meta: Vec<VariableMetaData>,
+    partials_meta: Vec<PartialsMetaData>,
+    /// Whether `get_variable_definitions` has completed. Tracked separately from
+    /// `var_meta` being non-empty, since a discipline may declare only discrete
+    /// variables.
+    metadata_fetched: bool,
 }
 
 impl DisciplineClient {
@@ -28,13 +57,20 @@ impl DisciplineClient {
             .await
             .map_err(|e| PhiloteError::config_error(format!("Failed to connect: {}", e)))?;
 
-        let client = DisciplineServiceClient::new(channel);
+        Ok(Self::from_channel(channel))
+    }
 
-        Ok(Self {
-            client,
+    /// Build a client from an existing channel.
+    pub fn from_channel(channel: Channel) -> Self {
+        Self {
+            client: DisciplineServiceClient::new(channel),
             stream_options: StreamOptions::default(),
             rpc_timeout: None,
-        })
+            var_meta: Vec::new(),
+            discrete_meta: Vec::new(),
+            partials_meta: Vec::new(),
+            metadata_fetched: false,
+        }
     }
 
     pub fn with_stream_options(mut self, options: StreamOptions) -> Self {
@@ -51,7 +87,41 @@ impl DisciplineClient {
         &self.stream_options
     }
 
-    fn make_request<T>(&self, inner: T) -> Request<T> {
+    /// Cached continuous variable metadata, populated by
+    /// [`get_variable_definitions`](Self::get_variable_definitions).
+    pub fn var_meta(&self) -> &[VariableMetaData] {
+        &self.var_meta
+    }
+
+    /// Cached discrete variable metadata.
+    pub fn discrete_meta(&self) -> &[VariableMetaData] {
+        &self.discrete_meta
+    }
+
+    /// Cached partials metadata, populated by
+    /// [`get_partial_definitions`](Self::get_partial_definitions).
+    pub fn partials_meta(&self) -> &[PartialsMetaData] {
+        &self.partials_meta
+    }
+
+    /// Error if variable metadata has not been fetched yet.
+    ///
+    /// Array reconstruction needs declared shapes, so a compute call before
+    /// `setup`/`get_variable_definitions` cannot produce correct results.
+    /// Philote-Python silently returns empty maps in this situation; erroring is a
+    /// deliberate divergence.
+    ///
+    /// This tracks whether the fetch happened, not whether it returned anything: a
+    /// discipline may legitimately declare only discrete variables, leaving the
+    /// continuous metadata empty.
+    pub(crate) fn require_metadata(&self) -> Result<()> {
+        if !self.metadata_fetched {
+            return Err(PhiloteError::SetupNotCalled);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn make_request<T>(&self, inner: T) -> Request<T> {
         let mut req = Request::new(inner);
         if let Some(timeout) = self.rpc_timeout {
             req.set_timeout(timeout);
@@ -81,24 +151,22 @@ impl DisciplineClient {
         let options_list = response.into_inner();
 
         let mut options_map = HashMap::new();
-
         for (option_name, data_type_int) in
             options_list.options.iter().zip(options_list.r#type.iter())
         {
+            // Canonical names, matching Philote-Python's vocabulary.
             let type_str = match data_type_int {
                 0 => "bool",
                 1 => "int",
-                2 => "double",
-                3 => "string",
-                4 => "struct",
-                _ => {
+                2 => "float",
+                3 => "str",
+                4 => "dict",
+                other => {
                     return Err(PhiloteError::InvalidVariableType(format!(
-                        "Unknown data type: {}",
-                        data_type_int
+                        "Unknown data type: {other}"
                     )))
                 }
             };
-
             options_map.insert(option_name.clone(), type_str.to_string());
         }
 
@@ -106,28 +174,38 @@ impl DisciplineClient {
     }
 
     pub async fn set_options(&mut self, options: HashMap<String, serde_json::Value>) -> Result<()> {
-        let fields: BTreeMap<String, prost_types::Value> = options
-            .into_iter()
-            .map(|(k, v)| (k, json_to_proto_value(&v)))
-            .collect();
-
-        let struct_value = Some(prost_types::Struct { fields });
-
         let discipline_options = DisciplineOptions {
-            options: struct_value,
+            options: Some(json_map_to_struct(&options)),
         };
-
         self.client
             .set_options(self.make_request(discipline_options))
             .await?;
         Ok(())
     }
 
+    /// Run the discipline's setup on the server.
+    ///
+    /// The server rebuilds its metadata from scratch, so the local cache is
+    /// dropped: reusing it (for example after changing an option that resizes a
+    /// variable) would decode later responses against stale shapes.
     pub async fn setup(&mut self) -> Result<()> {
         self.client.setup(self.make_request(())).await?;
+        self.invalidate_metadata();
         Ok(())
     }
 
+    /// Drop all cached metadata.
+    fn invalidate_metadata(&mut self) {
+        self.var_meta.clear();
+        self.discrete_meta.clear();
+        self.partials_meta.clear();
+        self.metadata_fetched = false;
+    }
+
+    /// Fetch and cache variable definitions.
+    ///
+    /// Discrete metadata is separated from continuous metadata, so array
+    /// preallocation never sees a discrete variable.
     pub async fn get_variable_definitions(&mut self) -> Result<Vec<VariableMetaData>> {
         let response = self
             .client
@@ -135,14 +213,26 @@ impl DisciplineClient {
             .await?;
         let mut stream = response.into_inner();
 
-        let mut variables = Vec::new();
-        while let Some(var_meta) = stream.message().await? {
-            variables.push(var_meta);
+        self.var_meta.clear();
+        self.discrete_meta.clear();
+
+        while let Some(meta) = stream.message().await? {
+            let var_type = VariableType::try_from(meta.r#type).map_err(|_| {
+                PhiloteError::InvalidVariableType(format!("Invalid type: {}", meta.r#type))
+            })?;
+            match var_type {
+                VariableType::KDiscreteInput | VariableType::KDiscreteOutput => {
+                    self.discrete_meta.push(meta)
+                }
+                _ => self.var_meta.push(meta),
+            }
         }
 
-        Ok(variables)
+        self.metadata_fetched = true;
+        Ok(self.var_meta.clone())
     }
 
+    /// Fetch and cache partials definitions.
     pub async fn get_partial_definitions(&mut self) -> Result<Vec<PartialsMetaData>> {
         let response = self
             .client
@@ -150,24 +240,60 @@ impl DisciplineClient {
             .await?;
         let mut stream = response.into_inner();
 
-        let mut partials = Vec::new();
+        self.partials_meta.clear();
         while let Some(partial_meta) = stream.message().await? {
-            partials.push(partial_meta);
+            self.partials_meta.push(partial_meta);
         }
 
-        Ok(partials)
+        Ok(self.partials_meta.clone())
     }
 
+    /// Cached variables that were declared with a dynamic shape.
+    pub fn dynamic_variables(&self) -> Vec<VariableMetaData> {
+        self.var_meta
+            .iter()
+            .filter(|v| v.dynamic_shape)
+            .cloned()
+            .collect()
+    }
+
+    /// Fetch variable definitions and return those with a dynamic shape.
     pub async fn get_dynamic_variables(&mut self) -> Result<Vec<VariableMetaData>> {
-        let all_vars = self.get_variable_definitions().await?;
-        Ok(all_vars.into_iter().filter(|v| v.dynamic_shape).collect())
+        self.get_variable_definitions().await?;
+        Ok(self.dynamic_variables())
     }
 
+    /// Send resolved shapes for dynamic variables and update the local cache.
+    ///
+    /// Updating the cache matters: subsequent responses are decoded into arrays
+    /// preallocated from it, so a stale cache would produce zero-length arrays.
     pub async fn send_variable_shapes(&mut self, shapes: Vec<VariableMetaData>) -> Result<()> {
-        let stream = tokio_stream::iter(shapes);
+        let stream = tokio_stream::iter(shapes.clone());
         self.client
             .set_variable_shapes(self.make_request(stream))
             .await?;
+
+        // Declared partial shapes were derived from the previous variable shapes,
+        // so they no longer describe what the server will send. Clearing them makes
+        // `recover_partials` re-derive from the updated variable metadata.
+        for partial in self.partials_meta.iter_mut() {
+            partial.shape.clear();
+        }
+
+        for meta in shapes {
+            for var in self.var_meta.iter_mut() {
+                let matches_target = var.name == meta.name && var.r#type == meta.r#type;
+                // An implicit output's residual shares its name and shape.
+                let matches_residual = var.name == meta.name
+                    && meta.r#type == i32::from(VariableType::KOutput)
+                    && var.r#type == i32::from(VariableType::KResidual);
+
+                if matches_target || matches_residual {
+                    var.shape.clone_from(&meta.shape);
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -178,28 +304,10 @@ impl Clone for DisciplineClient {
             client: self.client.clone(),
             stream_options: self.stream_options,
             rpc_timeout: self.rpc_timeout,
+            var_meta: self.var_meta.clone(),
+            discrete_meta: self.discrete_meta.clone(),
+            partials_meta: self.partials_meta.clone(),
+            metadata_fetched: self.metadata_fetched,
         }
     }
-}
-
-fn json_to_proto_value(v: &serde_json::Value) -> prost_types::Value {
-    use prost_types::value::Kind;
-    let kind = match v {
-        serde_json::Value::Null => Some(Kind::NullValue(0)),
-        serde_json::Value::Bool(b) => Some(Kind::BoolValue(*b)),
-        serde_json::Value::Number(n) => Some(Kind::NumberValue(n.as_f64().unwrap_or(0.0))),
-        serde_json::Value::String(s) => Some(Kind::StringValue(s.clone())),
-        serde_json::Value::Array(arr) => {
-            let values: Vec<prost_types::Value> = arr.iter().map(json_to_proto_value).collect();
-            Some(Kind::ListValue(prost_types::ListValue { values }))
-        }
-        serde_json::Value::Object(map) => {
-            let fields: BTreeMap<String, prost_types::Value> = map
-                .iter()
-                .map(|(k, v)| (k.clone(), json_to_proto_value(v)))
-                .collect();
-            Some(Kind::StructValue(prost_types::Struct { fields }))
-        }
-    };
-    prost_types::Value { kind }
 }

@@ -22,8 +22,11 @@
 //! let info = client.get_info().await?;
 //! println!("Connected to {} v{}", info.name, info.version);
 //!
-//! // Get variable definitions
+//! // Run setup, then fetch metadata. Both are required before computing: array
+//! // responses are decoded using the declared shapes.
+//! client.setup().await?;
 //! let variables = client.get_variable_definitions().await?;
+//! client.get_partial_definitions().await?;
 //! println!("Discipline has {} variables", variables.len());
 //! # Ok(())
 //! # }
@@ -33,6 +36,6 @@ pub mod base;
 pub mod explicit;
 pub mod implicit;
 
-pub use base::DisciplineClient;
+pub use base::{variable_shape_meta, DisciplineClient};
 pub use explicit::ExplicitClient;
 pub use implicit::ImplicitClient;

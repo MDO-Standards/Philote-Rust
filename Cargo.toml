@@ -48,6 +48,11 @@ async-trait = "0.1"
 [build-dependencies]
 tonic-build = "0.12"
 
+[dev-dependencies]
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+approx = "0.5"
+
 [features]
 default = []
 
@@ -62,3 +67,19 @@ path = "examples/client_example.rs"
 [[example]]
 name = "server_runner"
 path = "examples/server_runner.rs"
+
+[[example]]
+name = "paraboloid_server"
+path = "examples/paraboloid_server.rs"
+
+[[example]]
+name = "paraboloid_client"
+path = "examples/paraboloid_client.rs"
+
+[[example]]
+name = "quadratic_implicit"
+path = "examples/quadratic_implicit.rs"
+
+[[example]]
+name = "quadratic_client"
+path = "examples/quadratic_client.rs"

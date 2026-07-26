@@ -87,6 +87,52 @@ pub enum PhiloteError {
 
     #[error("Operation cancelled")]
     Cancelled,
+
+    /// An input failed validation.
+    ///
+    /// Maps to `INVALID_ARGUMENT` on the wire, matching Philote-Python's use of
+    /// `PhiloteValidationError`.
+    #[error("{context}: {message}")]
+    Validation { context: String, message: String },
+}
+
+impl PhiloteError {
+    /// Create a validation error tagged with the operation that rejected the input.
+    pub fn validation<C: Into<String>, M: Into<String>>(context: C, message: M) -> Self {
+        PhiloteError::Validation {
+            context: context.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Convert to a gRPC [`Status`](tonic::Status).
+    ///
+    /// Client-supplied errors (validation failures, unknown variables, bad types,
+    /// shape mismatches) map to `INVALID_ARGUMENT`; everything else is `INTERNAL`.
+    /// Philote-Python draws the same distinction via `context.abort`.
+    pub fn to_status(&self) -> tonic::Status {
+        match self {
+            PhiloteError::Validation { .. }
+            | PhiloteError::VariableNotFound(_)
+            | PhiloteError::InvalidVariableType(_)
+            | PhiloteError::InvalidOption { .. }
+            | PhiloteError::ShapeMismatch { .. }
+            | PhiloteError::IndexOutOfBounds { .. }
+            | PhiloteError::SetupNotCalled
+            | PhiloteError::DisciplineNotInitialized => {
+                tonic::Status::invalid_argument(self.to_string())
+            }
+            PhiloteError::Cancelled => tonic::Status::cancelled(self.to_string()),
+            PhiloteError::NotImplemented(_) => tonic::Status::unimplemented(self.to_string()),
+            _ => tonic::Status::internal(self.to_string()),
+        }
+    }
+}
+
+impl From<PhiloteError> for tonic::Status {
+    fn from(err: PhiloteError) -> Self {
+        err.to_status()
+    }
 }
 
 impl PhiloteError {

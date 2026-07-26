@@ -145,6 +145,21 @@ impl TryFrom<Array> for ArrayData {
             return Err(PhiloteError::array_error("Array contains no data"));
         }
 
+        // Reject negative indices here rather than letting `as usize` wrap them
+        // into huge values that overflow downstream arithmetic.
+        if array.start < 0 || array.end < 0 {
+            return Err(PhiloteError::array_error(format!(
+                "Array '{}' has negative indices {}..={}",
+                array.name, array.start, array.end
+            )));
+        }
+        if array.end < array.start {
+            return Err(PhiloteError::array_error(format!(
+                "Array '{}' has end {} before start {}",
+                array.name, array.end, array.start
+            )));
+        }
+
         let subname = if array.subname.is_empty() {
             None
         } else {
@@ -227,8 +242,13 @@ pub struct ArrayChunker {
 }
 
 impl ArrayChunker {
+    /// Create a chunker.
+    ///
+    /// A `chunk_size` of zero would make no progress, so it is clamped to one.
     pub fn new(chunk_size: usize) -> Self {
-        Self { chunk_size }
+        Self {
+            chunk_size: chunk_size.max(1),
+        }
     }
 
     pub fn chunk_array(&self, name: &str, data: &[f64], var_type: VariableType) -> Vec<ArrayData> {
