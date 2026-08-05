@@ -36,8 +36,11 @@
 //! # }
 //! ```
 
+/// Server for the `DisciplineService` RPCs shared by every discipline.
 pub mod base;
+/// Server for explicit disciplines (`ExplicitService`).
 pub mod explicit;
+/// Server for implicit disciplines (`ImplicitService`).
 pub mod implicit;
 
 pub use base::DisciplineServer;

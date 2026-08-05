@@ -45,12 +45,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Negative `Array.start`/`Array.end` from a peer are rejected rather than wrapping
   through `as usize` into an arithmetic overflow.
 - A chunk size of zero no longer panics; it falls back to one.
+- A discrete value sent for an undeclared name is rejected with `VariableNotFound`
+  instead of being inserted into the map and ignored. Continuous variables were
+  already rejected this way; a discipline declaring no discrete variables at all
+  now also refuses discrete values rather than silently dropping them.
+- Malformed messages from a peer (an empty `Array` payload, negative indices,
+  `end` before `start`, a partial chunk missing its `subname`) map to
+  `INVALID_ARGUMENT` rather than `INTERNAL`. `ArrayError` is now reserved for a
+  discipline's own compute failing, which correctly stays `INTERNAL`.
+- `PhiloteError::GrpcError` preserves the status code it wraps instead of
+  flattening it to `INTERNAL`, so a server proxying a downstream Philote call no
+  longer reports the peer's `INVALID_ARGUMENT` as its own internal failure.
+- `build.rs` falls back to a vendored `protoc`, so building the crate no longer
+  requires one on `PATH`. This is what lets docs.rs build the documentation. Set
+  `PROTOC` to override.
 
 ### Added
 
 - `VariableRegistry` and the `impl_registry!` macro. Metadata storage moved out of
   each discipline into a shared registry, which is what makes shape resolution,
   duplicate detection, residual twins, and re-`Setup` clearing possible.
+- `wire` module: the single public implementation of the Philote chunk format
+  (encode, decode, and stream assembly), replacing the two divergent encoders that
+  previously lived in `utils`.
 - Discrete variable support: declared defaults, per-type metadata, and full
   `google.protobuf.Value` round trips including nested structures.
 - Client-resolved shapes: `add_dynamic_input` / `add_dynamic_output`,
@@ -65,6 +82,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wire encoding, dynamic shapes, discrete variables, edge cases, and end-to-end
   client/server round trips.
 - `PartialsMetaData.shape` is now populated by the server.
+- `VariableRegistry::discrete_input_names`, the declared-name set used to reject
+  undeclared discrete inputs. `discrete_input_defaults` cannot serve this purpose
+  because a discrete input may be declared without a default.
+- `missing_docs` is now warned on, and every public item is documented. CI runs
+  clippy with `-D warnings` over `--all-targets`, so this is enforced.
+- `rust-version = "1.70"`, matching what the README already claimed.
 
 ### Changed
 
@@ -90,8 +113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes on interoperability with Philote-Python
 
-Verified bidirectionally for the explicit path with identical numeric results.
-Two upstream Philote-Python defects are documented rather than reproduced (see
+Checked manually (not in CI) in both directions for the explicit path, with
+identical numeric results. `tests/interop_notes.rs` pins the wire conventions that
+check relied on, but it runs in-process and starts no Python. Two upstream Philote-Python defects are documented rather than reproduced (see
 `tests/interop_notes.rs`): its `GetInfo` is a generator although the proto
 declares it unary, so the call fails for any client including Python's own; and
 its implicit server emits an exclusive `Array.end` while its explicit server and

@@ -46,6 +46,10 @@ pub struct DisciplineClient {
 }
 
 impl DisciplineClient {
+    /// Connect to a discipline server at `dst` (for example `"http://host:50051"`).
+    ///
+    /// Fails with [`PhiloteError::ConfigurationError`] if the endpoint is malformed
+    /// or the connection cannot be established.
     pub async fn connect<T>(dst: T) -> Result<Self>
     where
         T: std::convert::TryInto<tonic::transport::Endpoint>,
@@ -73,16 +77,24 @@ impl DisciplineClient {
         }
     }
 
+    /// Set the local streaming options used to chunk outgoing arrays.
+    ///
+    /// This only configures the client; use
+    /// [`set_stream_options`](Self::set_stream_options) to also inform the server.
     pub fn with_stream_options(mut self, options: StreamOptions) -> Self {
         self.stream_options = options;
         self
     }
 
+    /// Apply a deadline to every RPC issued by this client.
+    ///
+    /// Without one, a stalled server blocks the call indefinitely.
     pub fn with_rpc_timeout(mut self, timeout: Duration) -> Self {
         self.rpc_timeout = Some(timeout);
         self
     }
 
+    /// The streaming options currently in effect for this client.
     pub fn stream_options(&self) -> &StreamOptions {
         &self.stream_options
     }
@@ -129,11 +141,16 @@ impl DisciplineClient {
         req
     }
 
+    /// Fetch the server's discipline properties (name, version, and capabilities).
     pub async fn get_info(&mut self) -> Result<DisciplineProperties> {
         let response = self.client.get_info(self.make_request(())).await?;
         Ok(response.into_inner())
     }
 
+    /// Negotiate streaming options with the server.
+    ///
+    /// The local copy is updated only after the server accepts, so both sides chunk
+    /// with the same limits.
     pub async fn set_stream_options(&mut self, options: StreamOptions) -> Result<()> {
         let proto_options = ProtoStreamOptions::from(options);
         self.client
@@ -143,6 +160,11 @@ impl DisciplineClient {
         Ok(())
     }
 
+    /// List the options the discipline accepts, mapped to their declared type name
+    /// (`"bool"`, `"int"`, `"float"`, `"str"`, or `"dict"`).
+    ///
+    /// Errors with [`PhiloteError::InvalidVariableType`] if the server reports a
+    /// type code outside that set.
     pub async fn get_available_options(&mut self) -> Result<HashMap<String, String>> {
         let response = self
             .client
@@ -173,6 +195,10 @@ impl DisciplineClient {
         Ok(options_map)
     }
 
+    /// Set discipline options on the server.
+    ///
+    /// Options that change variable shapes only take effect once
+    /// [`setup`](Self::setup) is called again.
     pub async fn set_options(&mut self, options: HashMap<String, serde_json::Value>) -> Result<()> {
         let discipline_options = DisciplineOptions {
             options: Some(json_map_to_struct(&options)),

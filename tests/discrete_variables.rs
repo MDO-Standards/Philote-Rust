@@ -8,12 +8,13 @@ mod common;
 
 use async_trait::async_trait;
 use philote_mdo::discrete::{json_to_value, value_to_json};
-use philote_mdo::examples::scalar;
+use philote_mdo::examples::{scalar, Paraboloid};
 use philote_mdo::philote_info::VariableType;
 use philote_mdo::registry::VariableRegistry;
 use philote_mdo::traits::{Discipline, ExplicitDiscipline};
-use philote_mdo::{impl_registry, ArrayMap, DiscreteMap, PartialMap, Result};
+use philote_mdo::{impl_registry, ArrayMap, DiscreteMap, PartialMap, PhiloteError, Result};
 use std::collections::HashMap;
+use tonic::Code;
 
 /// Scales `x` by a discrete `factor`, and echoes a discrete label back.
 #[derive(Default)]
@@ -87,6 +88,13 @@ impl ExplicitDiscipline for ScaledParaboloid {
 
 fn discrete(value: serde_json::Value) -> prost_types::Value {
     json_to_value(&value)
+}
+
+fn status_of(err: PhiloteError) -> tonic::Status {
+    match err {
+        PhiloteError::GrpcError(status) => *status,
+        other => panic!("expected a gRPC error, got {other:?}"),
+    }
 }
 
 // --- Declaration ---
@@ -325,4 +333,143 @@ async fn structured_discrete_values_survive_the_round_trip() {
     assert!(discrete_outputs.contains_key("label"));
 
     server.shutdown().await;
+}
+
+// --- Undeclared discrete inputs ---
+
+#[tokio::test]
+async fn an_undeclared_discrete_input_is_rejected() {
+    // The client does not filter discrete names against the fetched metadata, so a
+    // typo reaches the server; the server must reject it rather than quietly build
+    // a map entry the discipline will never read.
+    let server = common::spawn_explicit(ScaledParaboloid::default()).await;
+    let mut client = common::connected_explicit_client(&server).await;
+
+    let mut inputs = HashMap::new();
+    inputs.insert("x".to_string(), scalar(3.0));
+
+    let mut discrete_inputs: DiscreteMap = HashMap::new();
+    discrete_inputs.insert("factr".to_string(), discrete(serde_json::json!(10)));
+
+    let err = client
+        .compute_function_with_discrete(&inputs, &discrete_inputs)
+        .await
+        .expect_err("an undeclared discrete input should be rejected");
+    let status = status_of(err);
+    assert_eq!(status.code(), Code::InvalidArgument);
+    assert!(
+        status.message().contains("factr"),
+        "the offending name should be named: {}",
+        status.message()
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_discipline_without_discrete_variables_rejects_discrete_values() {
+    // Regression guard: this used to be silently dropped, so a client sending
+    // discrete data to a purely continuous discipline saw a successful compute.
+    let server = common::spawn_explicit(Paraboloid::new()).await;
+    let mut client = common::connected_explicit_client(&server).await;
+
+    let mut inputs = HashMap::new();
+    inputs.insert("x".to_string(), scalar(1.0));
+    inputs.insert("y".to_string(), scalar(2.0));
+
+    let mut discrete_inputs: DiscreteMap = HashMap::new();
+    discrete_inputs.insert("mode".to_string(), discrete(serde_json::json!("fast")));
+
+    let err = client
+        .compute_function_with_discrete(&inputs, &discrete_inputs)
+        .await
+        .expect_err("a discipline with no discrete variables should reject discrete values");
+    assert_eq!(status_of(err).code(), Code::InvalidArgument);
+
+    // Without the discrete value the same call succeeds, so the rejection is
+    // specific to the discrete payload.
+    let outputs = client.compute_function(&inputs).await.unwrap();
+    assert_eq!(outputs["f_xy"][[0]], 39.0);
+
+    server.shutdown().await;
+}
+
+/// Declares a discrete input with no default value.
+#[derive(Default)]
+struct DiscreteWithoutDefault {
+    registry: VariableRegistry,
+}
+
+impl Discipline for DiscreteWithoutDefault {
+    impl_registry!(registry);
+
+    fn setup(&mut self) -> Result<()> {
+        self.add_input("x", &[1], "")?;
+        self.add_output("y", &[1], "")?;
+        // No default: the declared set must come from the metadata, not the
+        // defaults map, or this name would look undeclared on arrival.
+        self.add_discrete_input("gain", None)?;
+        self.add_discrete_output("used", None)
+    }
+}
+
+#[async_trait]
+impl ExplicitDiscipline for DiscreteWithoutDefault {
+    async fn compute(&self, _inputs: &ArrayMap) -> Result<ArrayMap> {
+        unreachable!("the server uses the discrete path when discrete variables exist")
+    }
+
+    async fn compute_with_discrete(
+        &self,
+        inputs: &ArrayMap,
+        discrete_inputs: &DiscreteMap,
+    ) -> Result<(ArrayMap, DiscreteMap)> {
+        let gain = discrete_inputs
+            .get("gain")
+            .map(|v| value_to_json(v).as_f64().unwrap_or(1.0))
+            .unwrap_or(1.0);
+
+        let mut outputs = HashMap::new();
+        outputs.insert("y".to_string(), &inputs["x"] * gain);
+
+        let mut discrete_outputs = HashMap::new();
+        discrete_outputs.insert("used".to_string(), json_to_value(&serde_json::json!(gain)));
+        Ok((outputs, discrete_outputs))
+    }
+}
+
+#[tokio::test]
+async fn a_declared_discrete_input_without_a_default_is_accepted() {
+    let server = common::spawn_explicit(DiscreteWithoutDefault::default()).await;
+    let mut client = common::connected_explicit_client(&server).await;
+
+    assert_eq!(client.base().discrete_meta().len(), 2);
+
+    let mut inputs = HashMap::new();
+    inputs.insert("x".to_string(), scalar(4.0));
+
+    let mut discrete_inputs: DiscreteMap = HashMap::new();
+    discrete_inputs.insert("gain".to_string(), discrete(serde_json::json!(3)));
+
+    let (outputs, discrete_outputs) = client
+        .compute_function_with_discrete(&inputs, &discrete_inputs)
+        .await
+        .expect("a declared discrete input without a default should be accepted");
+
+    assert_eq!(outputs["y"][[0]], 12.0);
+    assert_eq!(
+        value_to_json(&discrete_outputs["used"]),
+        serde_json::json!(3)
+    );
+
+    server.shutdown().await;
+}
+
+#[test]
+fn a_discrete_input_without_a_default_is_still_declared() {
+    let mut d = DiscreteWithoutDefault::default();
+    d.setup().unwrap();
+
+    assert!(d.registry().discrete_input_defaults().is_empty());
+    assert!(d.registry().discrete_input_names().contains("gain"));
 }

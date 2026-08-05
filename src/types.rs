@@ -20,15 +20,26 @@ use ndarray::{ArrayD, ArrayViewD, ArrayViewMutD};
 use crate::philote_info::{Array, PartialsMetaData, VariableType};
 use crate::{PhiloteError, Result};
 
+/// A single discipline variable: its declared metadata plus its current values.
+///
+/// This is the assembled, N-dimensional form. On the wire a variable travels as a
+/// sequence of flat [`ArrayData`] chunks; shape is recovered from the declared
+/// metadata, never from the chunks.
 #[derive(Debug, Clone)]
 pub struct VariableData {
+    /// Variable name as declared to the discipline; the key both peers address it by.
     pub name: String,
+    /// Values, in the variable's declared N-dimensional shape.
     pub data: ArrayD<f64>,
+    /// Unit string (empty means dimensionless). Purely descriptive — no conversion
+    /// is performed here.
     pub units: String,
+    /// Role of the variable in the discipline (input, output, residual, ...).
     pub var_type: VariableType,
 }
 
 impl VariableData {
+    /// Wrap an existing array as a variable. The array's shape is taken as declared.
     pub fn new(name: String, data: ArrayD<f64>, units: String, var_type: VariableType) -> Self {
         Self {
             name,
@@ -38,31 +49,45 @@ impl VariableData {
         }
     }
 
+    /// Allocate a zero-filled variable of the given shape, ready to be filled by
+    /// incoming chunks or by a compute call.
     pub fn zeros(name: String, shape: &[usize], units: String, var_type: VariableType) -> Self {
         let data = ArrayD::zeros(shape);
         Self::new(name, data, units, var_type)
     }
 
+    /// Declared N-dimensional shape of the values.
     pub fn shape(&self) -> &[usize] {
         self.data.shape()
     }
 
+    /// Total number of elements, i.e. the length of the flattened wire form.
     pub fn size(&self) -> usize {
         self.data.len()
     }
 
+    /// Borrow the values immutably.
     pub fn view(&self) -> ArrayViewD<'_, f64> {
         self.data.view()
     }
 
+    /// Borrow the values mutably, for in-place compute.
     pub fn view_mut(&mut self) -> ArrayViewMutD<'_, f64> {
         self.data.view_mut()
     }
 
+    /// Copy the values out in row-major (logical) order — the order the wire
+    /// protocol's flat `start`/`end` indices refer to.
     pub fn flatten(&self) -> Vec<f64> {
         self.data.iter().copied().collect()
     }
 
+    /// Rebuild a variable from its flat wire form.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PhiloteError::ShapeMismatch`] if `flat_data` does not hold exactly
+    /// `shape.iter().product()` values.
     pub fn from_flat(
         name: String,
         flat_data: &[f64],
@@ -86,17 +111,32 @@ impl VariableData {
     }
 }
 
+/// One chunk of a variable in flight: a contiguous slice of the flattened array.
+///
+/// This is the Rust-side mirror of the [`Array`] protobuf message. Chunks carry no
+/// shape information — the receiver reconstructs N-D shape from the declared
+/// variable metadata (see [`crate::wire`]).
 #[derive(Debug, Clone)]
 pub struct ArrayData {
+    /// Name of the variable this chunk belongs to. For partials, the function name.
     pub name: String,
+    /// Second key, used only for partials: the variable the derivative is taken with
+    /// respect to. `None` for ordinary variables.
     pub subname: Option<String>,
+    /// First index of this chunk in the flattened array. **Inclusive.**
     pub start: usize,
+    /// Last index of this chunk in the flattened array. **Inclusive**, so the chunk
+    /// carries `end - start + 1` values.
     pub end: usize,
+    /// Role of the variable this chunk belongs to (input, output, partial, ...).
     pub var_type: VariableType,
+    /// The chunk's values, in row-major order over `start..=end`.
     pub data: Vec<f64>,
 }
 
 impl ArrayData {
+    /// Build a chunk. `start`/`end` are inclusive flat indices; callers are
+    /// responsible for keeping them consistent with `data.len()`.
     pub fn new(
         name: String,
         subname: Option<String>,
@@ -115,6 +155,8 @@ impl ArrayData {
         }
     }
 
+    /// Number of values actually carried. For a well-formed chunk this equals
+    /// `end - start + 1`.
     pub fn size(&self) -> usize {
         self.data.len()
     }
@@ -141,23 +183,35 @@ impl TryFrom<Array> for ArrayData {
             PhiloteError::InvalidVariableType(format!("Invalid type: {}", array.r#type))
         })?;
 
+        // Every rejection below is a malformed message from the peer, so it must
+        // report as INVALID_ARGUMENT rather than INTERNAL. `ArrayError` is reserved
+        // for a discipline's own compute failing.
         if array.data.is_empty() {
-            return Err(PhiloteError::array_error("Array contains no data"));
+            return Err(PhiloteError::validation(
+                "decode_array",
+                format!("array '{}' contains no data", array.name),
+            ));
         }
 
         // Reject negative indices here rather than letting `as usize` wrap them
         // into huge values that overflow downstream arithmetic.
         if array.start < 0 || array.end < 0 {
-            return Err(PhiloteError::array_error(format!(
-                "Array '{}' has negative indices {}..={}",
-                array.name, array.start, array.end
-            )));
+            return Err(PhiloteError::validation(
+                "decode_array",
+                format!(
+                    "array '{}' has negative indices {}..={}",
+                    array.name, array.start, array.end
+                ),
+            ));
         }
         if array.end < array.start {
-            return Err(PhiloteError::array_error(format!(
-                "Array '{}' has end {} before start {}",
-                array.name, array.end, array.start
-            )));
+            return Err(PhiloteError::validation(
+                "decode_array",
+                format!(
+                    "array '{}' has end {} before start {}",
+                    array.name, array.end, array.start
+                ),
+            ));
         }
 
         let subname = if array.subname.is_empty() {
@@ -177,8 +231,14 @@ impl TryFrom<Array> for ArrayData {
     }
 }
 
+/// Streaming behavior for a connection.
+///
+/// Connecting does not negotiate these; both peers start from
+/// [`Default`](Self::default) until a client calls `set_stream_options`.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamOptions {
+    /// Upper bound on the number of f64 values packed into a single [`Array`]
+    /// message. Caps the size of each gRPC message when large arrays are streamed.
     pub max_double_per_slice: usize,
 }
 
@@ -206,14 +266,20 @@ impl From<StreamOptions> for crate::philote_info::StreamOptions {
     }
 }
 
+/// Declaration of one partial derivative block, d(`name`)/d(`subname`).
 #[derive(Debug, Clone)]
 pub struct PartialsInfo {
+    /// Function (output/residual) being differentiated.
     pub name: String,
+    /// Variable being differentiated with respect to.
     pub subname: String,
+    /// Shape of the derivative block, derived from the two variable shapes by
+    /// [`crate::utils::calculate_partial_shape`].
     pub shape: Vec<usize>,
 }
 
 impl PartialsInfo {
+    /// Declare a partial derivative block of the given shape.
     pub fn new(name: String, subname: String, shape: Vec<usize>) -> Self {
         Self {
             name,
@@ -222,6 +288,7 @@ impl PartialsInfo {
         }
     }
 
+    /// Number of elements in the block, i.e. how many values it occupies on the wire.
     pub fn size(&self) -> usize {
         self.shape.iter().product()
     }
@@ -237,6 +304,10 @@ impl From<PartialsInfo> for PartialsMetaData {
     }
 }
 
+/// Splits flattened arrays into wire-sized [`ArrayData`] chunks.
+///
+/// The chunk size is normally taken from the negotiated
+/// [`StreamOptions::max_double_per_slice`].
 pub struct ArrayChunker {
     chunk_size: usize,
 }
@@ -251,6 +322,10 @@ impl ArrayChunker {
         }
     }
 
+    /// Cut a flattened array into consecutive chunks of at most `chunk_size` values.
+    ///
+    /// Each chunk's `start`/`end` are inclusive flat indices into `data`, so the
+    /// ranges tile it without gaps or overlap. An empty `data` yields no chunks.
     pub fn chunk_array(&self, name: &str, data: &[f64], var_type: VariableType) -> Vec<ArrayData> {
         let mut chunks = Vec::new();
         let mut start = 0;
@@ -438,7 +513,10 @@ mod tests {
         };
         let result = ArrayData::try_from(proto);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PhiloteError::ArrayError(_)));
+        // A malformed message from the peer, so INVALID_ARGUMENT, not INTERNAL.
+        let err = result.unwrap_err();
+        assert!(matches!(err, PhiloteError::Validation { .. }));
+        assert_eq!(err.to_status().code(), tonic::Code::InvalidArgument);
     }
 
     #[test]

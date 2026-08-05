@@ -32,8 +32,11 @@
 //! # }
 //! ```
 
+/// Client for the RPCs shared by every discipline, plus metadata caching.
 pub mod base;
+/// Client for explicit disciplines (function and gradient evaluation).
 pub mod explicit;
+/// Client for implicit disciplines (residuals, solve, and their gradients).
 pub mod implicit;
 
 pub use base::{variable_shape_meta, DisciplineClient};

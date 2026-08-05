@@ -19,7 +19,7 @@
 //! therefore reconstruct N-D shape from the declared
 //! [`VariableMetaData`], never from the chunks themselves.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ndarray::ArrayD;
 use tokio_stream::StreamExt;
@@ -48,21 +48,30 @@ pub fn scatter_chunk(target: &mut ArrayD<f64>, chunk: &ArrayData) -> Result<()> 
         .checked_sub(chunk.start)
         .map(|span| span + 1)
         .ok_or_else(|| {
-            PhiloteError::array_error(format!(
-                "chunk for '{}' has end {} before start {}",
-                chunk.name, chunk.end, chunk.start
-            ))
+            // Defensive: `ArrayData::try_from` already rejects end < start, so a
+            // chunk off the wire never reaches here. Kept because `scatter_chunk`
+            // is public and can be called with a hand-built `ArrayData`.
+            PhiloteError::validation(
+                "scatter_chunk",
+                format!(
+                    "chunk for '{}' has end {} before start {}",
+                    chunk.name, chunk.end, chunk.start
+                ),
+            )
         })?;
 
     if chunk.data.len() != expected {
-        return Err(PhiloteError::array_error(format!(
-            "chunk size mismatch for '{}': indices {}..={} span {} values, got {}",
-            chunk.name,
-            chunk.start,
-            chunk.end,
-            expected,
-            chunk.data.len()
-        )));
+        return Err(PhiloteError::validation(
+            "scatter_chunk",
+            format!(
+                "chunk size mismatch for '{}': indices {}..={} span {} values, got {}",
+                chunk.name,
+                chunk.start,
+                chunk.end,
+                expected,
+                chunk.data.len()
+            ),
+        ));
     }
 
     let len = target.len();
@@ -318,10 +327,10 @@ pub async fn recover_partials(
                 )));
             }
             let subname = chunk.subname.clone().ok_or_else(|| {
-                PhiloteError::array_error(format!(
-                    "partial chunk for '{}' is missing its subname",
-                    chunk.name
-                ))
+                PhiloteError::validation(
+                    "compute_gradient",
+                    format!("partial chunk for '{}' is missing its subname", chunk.name),
+                )
             })?;
             let key = (chunk.name.clone(), subname);
             let target = partials.get_mut(&key).ok_or_else(|| {
@@ -345,12 +354,15 @@ pub async fn recover_partials(
 
 /// Read a request stream on the server, scattering into preallocated maps.
 ///
-/// `outputs` is `Some` only for implicit RPCs.
+/// `outputs` is `Some` only for implicit RPCs. `declared_discrete` is the set of
+/// discrete input names the discipline declared; a discrete value for any other
+/// name is rejected, mirroring how an undeclared continuous variable is handled.
 pub async fn receive_request_stream(
     stream: &mut Streaming<VariableMessage>,
     inputs: &mut ArrayMap,
     mut outputs: Option<&mut ArrayMap>,
     discrete_inputs: &mut DiscreteMap,
+    declared_discrete: &HashSet<String>,
 ) -> Result<()> {
     while let Some(message) = stream.next().await {
         match message?.payload {
@@ -387,6 +399,12 @@ pub async fn receive_request_stream(
                         "expected a discrete input for '{}', but the client sent type {}",
                         var.name, var.r#type
                     )));
+                }
+                if !declared_discrete.contains(&var.name) {
+                    // Silently dropping this would hide a client bug, and would also
+                    // mean a discipline that declares no discrete variables accepts
+                    // discrete values and ignores them.
+                    return Err(PhiloteError::VariableNotFound(var.name));
                 }
                 if let Some(value) = var.value {
                     discrete_inputs.insert(var.name, value);
@@ -457,8 +475,10 @@ mod tests {
     fn rejects_chunk_length_mismatch() {
         let mut target: ArrayD<f64> = ArrayD::zeros(vec![4]);
         let err = scatter_chunk(&mut target, &chunk("x", 0, 2, vec![1.0, 2.0])).unwrap_err();
-        assert!(matches!(err, PhiloteError::ArrayError(_)));
+        // A malformed chunk is the peer's fault, so it must map to INVALID_ARGUMENT.
+        assert!(matches!(err, PhiloteError::Validation { .. }));
         assert!(err.to_string().contains("size mismatch"));
+        assert_eq!(err.to_status().code(), tonic::Code::InvalidArgument);
     }
 
     #[test]

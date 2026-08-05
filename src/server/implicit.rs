@@ -32,11 +32,13 @@ impl<D: ImplicitDiscipline + 'static> ImplicitServer<D> {
         }
     }
 
+    /// Log each served RPC at info level; see [`DisciplineServer::with_verbose`].
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.base = self.base.with_verbose(verbose);
         self
     }
 
+    /// The served discipline; see [`DisciplineServer::discipline`].
     pub fn discipline(&self) -> &Arc<RwLock<D>> {
         self.base.discipline()
     }

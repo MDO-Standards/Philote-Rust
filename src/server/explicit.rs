@@ -21,17 +21,21 @@ pub struct ExplicitServer<D: ExplicitDiscipline + 'static> {
 }
 
 impl<D: ExplicitDiscipline + 'static> ExplicitServer<D> {
+    /// Wrap an explicit discipline for serving; see [`DisciplineServer::new`], which
+    /// also runs the discipline's `initialize`.
     pub fn new(discipline: D) -> Self {
         Self {
             base: DisciplineServer::new(discipline),
         }
     }
 
+    /// Log each served RPC at info level; see [`DisciplineServer::with_verbose`].
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.base = self.base.with_verbose(verbose);
         self
     }
 
+    /// The served discipline; see [`DisciplineServer::discipline`].
     pub fn discipline(&self) -> &Arc<RwLock<D>> {
         self.base.discipline()
     }

@@ -37,11 +37,17 @@ impl<D: Discipline + 'static> DisciplineServer<D> {
         }
     }
 
+    /// Log each served RPC at info level.
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
 
+    /// Replace the served discipline.
+    ///
+    /// Returns a future rather than being `async` so callers holding only a shared
+    /// reference can spawn it; the write lock is taken when the future runs.
+    /// Unlike [`new`](Self::new), this does not call `initialize`.
     pub fn set_discipline(&self, discipline: D) -> impl std::future::Future<Output = ()> + Send {
         let discipline_lock = Arc::clone(&self.discipline);
         async move {
@@ -56,14 +62,17 @@ impl<D: Discipline + 'static> DisciplineServer<D> {
         }
     }
 
+    /// The served discipline, shared with every in-flight RPC.
     pub fn discipline(&self) -> &Arc<RwLock<D>> {
         &self.discipline
     }
 
+    /// The streaming options in effect, as last set by the client.
     pub fn stream_options(&self) -> &Arc<RwLock<StreamOptions>> {
         &self.stream_options
     }
 
+    /// Whether verbose RPC logging is enabled.
     pub fn verbose(&self) -> bool {
         self.verbose
     }
@@ -127,7 +136,20 @@ impl<D: Discipline + 'static> DisciplineServer<D> {
         outputs: Option<&mut ArrayMap>,
         discrete_inputs: &mut DiscreteMap,
     ) -> Result<()> {
-        wire::receive_request_stream(&mut request_stream, inputs, outputs, discrete_inputs).await
+        let declared_discrete = self
+            .discipline
+            .read()
+            .await
+            .registry()
+            .discrete_input_names();
+        wire::receive_request_stream(
+            &mut request_stream,
+            inputs,
+            outputs,
+            discrete_inputs,
+            &declared_discrete,
+        )
+        .await
     }
 }
 

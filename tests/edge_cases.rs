@@ -127,7 +127,9 @@ fn an_empty_array_payload_is_rejected() {
         data: vec![],
     };
     let err = ArrayData::try_from(proto).unwrap_err();
-    assert!(matches!(err, PhiloteError::ArrayError(_)));
+    // A malformed message from the peer, so INVALID_ARGUMENT, not INTERNAL.
+    assert!(matches!(err, PhiloteError::Validation { .. }));
+    assert_eq!(err.to_status().code(), Code::InvalidArgument);
 }
 
 #[test]

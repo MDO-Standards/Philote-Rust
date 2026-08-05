@@ -39,14 +39,30 @@ use std::collections::HashMap;
 use crate::philote_info::{VariableMetaData, VariableType};
 use crate::{ArrayMap, PartialMap, PhiloteError, Result};
 
+/// Copy an array out in row-major (logical) order.
+///
+/// This is the order the wire protocol's flat `start`/`end` indices address, so it
+/// is the canonical flattening for chunking. Despite the name it allocates: an
+/// `ArrayD` may be non-contiguous, so a borrowed slice is not always available.
 pub fn create_flattened_view(array: &ArrayD<f64>) -> Vec<f64> {
     array.iter().copied().collect()
 }
 
+/// Borrow an array mutably so a discipline can write results in place.
 pub fn get_flattened_view_mut(array: &mut ArrayD<f64>) -> ArrayViewMutD<'_, f64> {
     array.view_mut()
 }
 
+/// Allocate a zero-filled array for each declared variable, keyed by name.
+///
+/// Receivers must have storage in place before chunks arrive, since chunks carry
+/// only flat index ranges and no shape. Pass `filter_type` to allocate just one
+/// role (e.g. only inputs).
+///
+/// # Errors
+///
+/// Returns [`PhiloteError::InvalidVariableType`] if a metadata entry carries a type
+/// tag outside [`VariableType`].
 pub fn preallocate_arrays(
     var_meta: &[VariableMetaData],
     filter_type: Option<VariableType>,
@@ -72,6 +88,13 @@ pub fn preallocate_arrays(
     Ok(arrays)
 }
 
+/// Allocate a zero-filled derivative block for each requested `(function, variable)`
+/// pair, sized by [`calculate_partial_shape`] from the two variables' shapes.
+///
+/// # Errors
+///
+/// Returns [`PhiloteError::VariableNotFound`] if either half of a pair is not
+/// declared in `var_meta`.
 pub fn preallocate_partials(
     var_meta: &[VariableMetaData],
     partials_meta: &[(String, String)],
@@ -125,6 +148,13 @@ pub fn calculate_partial_shape(func_shape: &[usize], var_shape: &[usize]) -> Vec
     }
 }
 
+/// Check that every array whose name appears in `expected_meta` has the declared
+/// shape. Arrays with no matching declaration are ignored rather than rejected.
+///
+/// # Errors
+///
+/// Returns [`PhiloteError::ShapeMismatch`] on the first array whose shape differs
+/// from its declaration.
 pub fn validate_array_shapes(arrays: &ArrayMap, expected_meta: &[VariableMetaData]) -> Result<()> {
     let expected_shapes: HashMap<String, Vec<usize>> = expected_meta
         .iter()
@@ -149,37 +179,54 @@ pub fn validate_array_shapes(arrays: &ArrayMap, expected_meta: &[VariableMetaDat
     Ok(())
 }
 
+/// A map keyed by a pair of names, as partials are: `(function, variable)`.
+///
+/// Thin wrapper over a [`HashMap`] that gives partial-derivative collections a name
+/// and supports `dict[(f, x)]`-style indexing, mirroring Philote-Python.
+///
+/// # Panics
+///
+/// The [`Index`](std::ops::Index) and [`IndexMut`](std::ops::IndexMut) impls panic
+/// if the key is absent, like `HashMap`'s. Use [`get`](Self::get) /
+/// [`get_mut`](Self::get_mut) when the key may be missing.
 pub struct PairDict<T> {
     data: HashMap<(String, String), T>,
 }
 
 impl<T> PairDict<T> {
+    /// Create an empty map.
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
         }
     }
 
+    /// Insert a value, returning the previous one for that pair if there was one.
     pub fn insert(&mut self, key: (String, String), value: T) -> Option<T> {
         self.data.insert(key, value)
     }
 
+    /// Look up a value, or `None` if the pair is not present.
     pub fn get(&self, key: &(String, String)) -> Option<&T> {
         self.data.get(key)
     }
 
+    /// Look up a value mutably, or `None` if the pair is not present.
     pub fn get_mut(&mut self, key: &(String, String)) -> Option<&mut T> {
         self.data.get_mut(key)
     }
 
+    /// Iterate over `(pair, value)` entries in arbitrary order.
     pub fn iter(&self) -> impl Iterator<Item = (&(String, String), &T)> {
         self.data.iter()
     }
 
+    /// Iterate over the `(function, variable)` pairs in arbitrary order.
     pub fn keys(&self) -> impl Iterator<Item = &(String, String)> {
         self.data.keys()
     }
 
+    /// Iterate over the values in arbitrary order.
     pub fn values(&self) -> impl Iterator<Item = &T> {
         self.data.values()
     }

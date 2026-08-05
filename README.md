@@ -30,8 +30,11 @@ Philote-Rust provides a high-performance, type-safe implementation for creating 
 
 This crate implements the [Philote-MDO standard](https://github.com/MDO-Standards/Philote-MDO)
 (v0.8.0), so its clients and servers interoperate with other implementations of
-the standard. Verified against Philote-Python: a Rust client drives a Python
-paraboloid server and vice versa, with identical results.
+the standard. Checked manually against Philote-Python: a Rust client drove a Python
+paraboloid server and vice versa, with identical results. This was a one-off
+manual check, not a CI job — nothing here will catch an interop regression.
+`tests/interop_notes.rs` pins the wire conventions that check depended on, but it
+runs entirely in-process and starts no Python.
 
 Two caveats when talking to Philote-Python specifically:
 
@@ -53,18 +56,15 @@ Add Philote to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-philote-mdo = { git = "https://github.com/MDO-Standards/Philote-Rust.git" }
+philote-mdo = "0.2"
 ```
 
 ### Prerequisites
 
 - Rust 1.70 or later
-- Protocol Buffers compiler (`protoc`) for building from source
 
-On Ubuntu/Debian:
-```bash
-sudo apt-get install protobuf-compiler
-```
+`protoc` is **not** required: the build vendors its own copy. To build against a
+system `protoc` instead, set the `PROTOC` environment variable to its path.
 
 On macOS:
 ```bash

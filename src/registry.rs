@@ -7,7 +7,7 @@
 //!
 //! This mirrors the state held on `philote_mdo.general.Discipline` in Philote-Python.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::philote_info::{VariableMetaData, VariableType};
 use crate::validation::{validate_name, validate_option_type, validate_shape};
@@ -306,6 +306,18 @@ impl VariableRegistry {
             .iter()
             .filter(|((_, var_type), _)| *var_type == i32::from(VariableType::KDiscreteInput))
             .map(|((name, _), value)| (name.clone(), value.clone()))
+            .collect()
+    }
+
+    /// Names of every declared discrete *input*, whether or not it has a default.
+    ///
+    /// [`discrete_input_defaults`](Self::discrete_input_defaults) only covers those
+    /// with a default, so it cannot be used to decide whether a name was declared.
+    pub fn discrete_input_names(&self) -> HashSet<String> {
+        self.discrete_meta
+            .iter()
+            .filter(|meta| meta.r#type == i32::from(VariableType::KDiscreteInput))
+            .map(|meta| meta.name.clone())
             .collect()
     }
 

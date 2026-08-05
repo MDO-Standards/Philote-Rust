@@ -21,8 +21,15 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Verify Cargo.toml version matches the release tag
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          CARGO_VERSION=$(grep -oP '^version\s*=\s*"\K[^"]+' Cargo.toml | head -1)
+          if [ "v$CARGO_VERSION" != "$TAG" ]; then
+            echo "::error::Cargo.toml says $CARGO_VERSION but the release tag is $TAG"
+            exit 1
+          fi
+          echo "Version $CARGO_VERSION matches tag $TAG"
 
       - name: Verify package contents
         run: |
@@ -31,9 +38,6 @@ jobs:
           echo "Verifying proto files are included..."
           cargo package --list | grep -q "proto/data.proto" || { echo "::error::proto/data.proto missing from package!"; exit 1; }
           cargo package --list | grep -q "proto/disciplines.proto" || { echo "::error::proto/disciplines.proto missing from package!"; exit 1; }
-
-      - name: Dry-run publish
-        run: cargo publish --dry-run
 
       - name: Publish to crates.io
         run: cargo publish

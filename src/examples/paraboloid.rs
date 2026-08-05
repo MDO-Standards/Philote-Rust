@@ -15,6 +15,9 @@ pub struct Paraboloid {
 }
 
 impl Paraboloid {
+    /// Create the discipline with an empty variable registry.
+    ///
+    /// `setup` declares the scalar inputs `x` and `y` and the output `f_xy`.
     pub fn new() -> Self {
         Self::default()
     }

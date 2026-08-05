@@ -17,6 +17,10 @@ pub struct FlexibleDiscipline {
 }
 
 impl FlexibleDiscipline {
+    /// Create the discipline with an empty variable registry.
+    ///
+    /// `setup` still has to run to declare `x` and `y`, and the client must set
+    /// their shapes before computing.
     pub fn new() -> Self {
         Self::default()
     }

@@ -30,6 +30,10 @@ impl Default for Rosenbrock {
 }
 
 impl Rosenbrock {
+    /// Create the discipline with the default input dimension of 2.
+    ///
+    /// The `dimension` option is declared here; set it before `setup` to size the
+    /// input vector differently.
     pub fn new() -> Self {
         Self::default()
     }

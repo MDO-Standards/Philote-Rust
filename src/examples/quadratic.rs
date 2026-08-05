@@ -23,6 +23,11 @@ impl Default for QuadraticImplicit {
 }
 
 impl QuadraticImplicit {
+    /// Create the discipline with a registry configured for an implicit
+    /// discipline, so each output gets a matching residual.
+    ///
+    /// `setup` declares the coefficients `a`, `b`, and `c` as inputs and the root
+    /// `x` as the implicit output.
     pub fn new() -> Self {
         Self::default()
     }
