@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PhiloteError::GrpcError` preserves the status code it wraps instead of
   flattening it to `INTERNAL`, so a server proxying a downstream Philote call no
   longer reports the peer's `INVALID_ARGUMENT` as its own internal failure.
+- `ImplicitServer::set_discipline` marks the replacement's registry implicit, as
+  `new` already did. A discipline built with `VariableRegistry::default()`
+  silently lost its residual metadata after a swap, and because `solve_residuals`
+  kept working the failure was partial and quiet.
+- A gradient response that is short or missing is rejected instead of decoding as
+  a zero Jacobian. `recover_arrays` already verified full population; the partials
+  path did not, and a zero derivative is a legitimate value, so the omission was
+  indistinguishable from a correct result.
 - `build.rs` falls back to a vendored `protoc`, so building the crate no longer
   requires one on `PATH`. This is what lets docs.rs build the documentation. Set
   `PROTOC` to override.
@@ -80,9 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FlexibleDiscipline`, matching Philote-Python's example disciplines.
 - Example binaries: `paraboloid_server`, `paraboloid_client`, `quadratic_implicit`,
   and `quadratic_client`.
-- Test coverage for the gRPC layer, which previously had none: 225 tests spanning
-  wire encoding, dynamic shapes, discrete variables, edge cases, and end-to-end
-  client/server round trips.
+- Test coverage for the gRPC layer, which previously had none: 307 tests spanning
+  wire encoding, dynamic shapes, discrete variables, edge cases, trait defaults,
+  the client and server API surfaces, and end-to-end round trips — 98.6% line and
+  97.9% function coverage.
 - `PartialsMetaData.shape` is now populated by the server.
 - `VariableRegistry::discrete_input_names`, the declared-name set used to reject
   undeclared discrete inputs. `discrete_input_defaults` cannot serve this purpose

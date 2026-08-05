@@ -44,7 +44,12 @@ impl<D: ImplicitDiscipline + 'static> ImplicitServer<D> {
     }
 
     /// Replace the served discipline.
-    pub async fn set_discipline(&self, discipline: D) {
+    ///
+    /// Marks the replacement's registry implicit, exactly as [`new`](Self::new)
+    /// does. Skipping this would silently drop the residual twins for any
+    /// discipline that relies on the server to mark its registry.
+    pub async fn set_discipline(&self, mut discipline: D) {
+        discipline.registry_mut().mark_implicit();
         self.base.set_discipline(discipline).await
     }
 
