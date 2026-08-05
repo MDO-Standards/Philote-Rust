@@ -70,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previously lived in `utils`.
 - Discrete variable support: declared defaults, per-type metadata, and full
   `google.protobuf.Value` round trips including nested structures.
+- `discrete` module: JSON ↔ protobuf `Value` conversion, the bridge that makes
+  those round trips possible.
 - Client-resolved shapes: `add_dynamic_input` / `add_dynamic_output`,
   `variable_shape_meta`, and automatic residual-twin resolution.
 - Input validation (`validation` module) mirroring Philote-Python, with a
@@ -78,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FlexibleDiscipline`, matching Philote-Python's example disciplines.
 - Example binaries: `paraboloid_server`, `paraboloid_client`, `quadratic_implicit`,
   and `quadratic_client`.
-- Test coverage for the gRPC layer, which previously had none: 217 tests spanning
+- Test coverage for the gRPC layer, which previously had none: 225 tests spanning
   wire encoding, dynamic shapes, discrete variables, edge cases, and end-to-end
   client/server round trips.
 - `PartialsMetaData.shape` is now populated by the server.
@@ -115,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Checked manually (not in CI) in both directions for the explicit path, with
 identical numeric results. `tests/interop_notes.rs` pins the wire conventions that
-check relied on, but it runs in-process and starts no Python. Two upstream Philote-Python defects are documented rather than reproduced (see
+check relied on, but it runs in-process and starts no Python. Two upstream
+Philote-Python defects are documented rather than reproduced (see
 `tests/interop_notes.rs`): its `GetInfo` is a generator although the proto
 declares it unary, so the call fails for any client including Python's own; and
 its implicit server emits an exclusive `Array.end` while its explicit server and
