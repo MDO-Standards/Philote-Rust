@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-06
+
 ### Fixed
 
 - **N-dimensional variables no longer arrive as zeros.** The server wrote received
@@ -144,5 +146,6 @@ both of its clients use an inclusive one.
 - Comprehensive error handling with domain-specific error types
 - Paraboloid example discipline
 
-[Unreleased]: https://github.com/MDO-Standards/Philote-Rust/compare/v0.1.0...develop
 [0.1.0]: https://github.com/MDO-Standards/Philote-Rust/releases/tag/v0.1.0
+[Unreleased]: https://github.com/MDO-Standards/Philote-Rust/compare/v0.2.0...develop
+[0.2.0]: https://github.com/MDO-Standards/Philote-Rust/compare/v0.1.0...v0.2.0
