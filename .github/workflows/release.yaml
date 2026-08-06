@@ -11,7 +11,39 @@ permissions:
   pull-requests: read
 
 jobs:
+  # Gate: never tag and publish a commit whose tests do not pass. `tests.yaml` runs
+  # on the PR, but a release is cut from `main` after merge, so re-verify that.
+  verify:
+    name: Verify main before release
+    if: |
+      github.event.pull_request.merged == true &&
+      (contains(github.event.pull_request.labels.*.name, 'release') ||
+       contains(github.event.pull_request.labels.*.name, 'prerelease'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-features --verbose
+
   release:
+    needs: verify
     if: |
       github.event.pull_request.merged == true &&
       (contains(github.event.pull_request.labels.*.name, 'release') ||
@@ -167,7 +199,7 @@ jobs:
           TAG="${{ steps.version.outputs.tag_version }}"
           CARGO_VERSION="${{ steps.version.outputs.cargo_version }}"
           DATE=$(date +%Y-%m-%d)
-          REPO="https://github.com/chrislupp/Philote-Rust"
+          REPO="https://github.com/${{ github.repository }}"
 
           if [ "${{ steps.labels.outputs.is_prerelease }}" = "true" ]; then
             if grep -q "## \[Unreleased\]" CHANGELOG.md; then
@@ -246,7 +278,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          git fetch origin develop
+          # The release is already tagged and published at this point, so a missing
+          # or unreachable `develop` must not fail the job.
+          if ! git fetch origin develop; then
+            echo "::warning::No 'develop' branch to merge back into; skipping."
+            exit 0
+          fi
           git checkout develop
 
           if git merge main --no-edit; then

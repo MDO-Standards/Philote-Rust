@@ -22,17 +22,23 @@
 //! let info = client.get_info().await?;
 //! println!("Connected to {} v{}", info.name, info.version);
 //!
-//! // Get variable definitions
+//! // Run setup, then fetch metadata. Both are required before computing: array
+//! // responses are decoded using the declared shapes.
+//! client.setup().await?;
 //! let variables = client.get_variable_definitions().await?;
+//! client.get_partial_definitions().await?;
 //! println!("Discipline has {} variables", variables.len());
 //! # Ok(())
 //! # }
 //! ```
 
+/// Client for the RPCs shared by every discipline, plus metadata caching.
 pub mod base;
+/// Client for explicit disciplines (function and gradient evaluation).
 pub mod explicit;
+/// Client for implicit disciplines (residuals, solve, and their gradients).
 pub mod implicit;
 
-pub use base::DisciplineClient;
+pub use base::{variable_shape_meta, DisciplineClient};
 pub use explicit::ExplicitClient;
 pub use implicit::ImplicitClient;

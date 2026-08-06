@@ -8,8 +8,10 @@
 //!
 //! - **Array manipulation**: [`create_flattened_view`], [`get_flattened_view_mut`]
 //! - **Memory allocation**: [`preallocate_arrays`], [`preallocate_partials`]
-//! - **Validation**: `validate_array_shapes`, `validate_variable_names`
-//! - **Streaming**: `collect_streamed_arrays`, `collect_streamed_partials`
+//! - **Shape rules**: [`calculate_partial_shape`]
+//! - **Validation**: [`validate_array_shapes`]
+//!
+//! Chunk encoding and decoding for variable streams lives in [`crate::wire`].
 //!
 //! # Example
 //!
@@ -35,17 +37,32 @@ use ndarray::{ArrayD, ArrayViewMutD};
 use std::collections::HashMap;
 
 use crate::philote_info::{VariableMetaData, VariableType};
-use crate::types::{ArrayChunker, ArrayData};
 use crate::{ArrayMap, PartialMap, PhiloteError, Result};
 
+/// Copy an array out in row-major (logical) order.
+///
+/// This is the order the wire protocol's flat `start`/`end` indices address, so it
+/// is the canonical flattening for chunking. Despite the name it allocates: an
+/// `ArrayD` may be non-contiguous, so a borrowed slice is not always available.
 pub fn create_flattened_view(array: &ArrayD<f64>) -> Vec<f64> {
     array.iter().copied().collect()
 }
 
+/// Borrow an array mutably so a discipline can write results in place.
 pub fn get_flattened_view_mut(array: &mut ArrayD<f64>) -> ArrayViewMutD<'_, f64> {
     array.view_mut()
 }
 
+/// Allocate a zero-filled array for each declared variable, keyed by name.
+///
+/// Receivers must have storage in place before chunks arrive, since chunks carry
+/// only flat index ranges and no shape. Pass `filter_type` to allocate just one
+/// role (e.g. only inputs).
+///
+/// # Errors
+///
+/// Returns [`PhiloteError::InvalidVariableType`] if a metadata entry carries a type
+/// tag outside [`VariableType`].
 pub fn preallocate_arrays(
     var_meta: &[VariableMetaData],
     filter_type: Option<VariableType>,
@@ -71,6 +88,13 @@ pub fn preallocate_arrays(
     Ok(arrays)
 }
 
+/// Allocate a zero-filled derivative block for each requested `(function, variable)`
+/// pair, sized by [`calculate_partial_shape`] from the two variables' shapes.
+///
+/// # Errors
+///
+/// Returns [`PhiloteError::VariableNotFound`] if either half of a pair is not
+/// declared in `var_meta`.
 pub fn preallocate_partials(
     var_meta: &[VariableMetaData],
     partials_meta: &[(String, String)],
@@ -103,7 +127,11 @@ pub fn preallocate_partials(
     Ok(partials)
 }
 
-fn calculate_partial_shape(func_shape: &[usize], var_shape: &[usize]) -> Vec<usize> {
+/// Derive the shape of a partial derivative from its function and variable shapes.
+///
+/// A scalar on either side is absorbed rather than producing a length-1 axis;
+/// otherwise the shapes are concatenated. This matches Philote-Python.
+pub fn calculate_partial_shape(func_shape: &[usize], var_shape: &[usize]) -> Vec<usize> {
     match (func_shape, var_shape) {
         // Both scalar
         ([1], [1]) => vec![1],
@@ -120,44 +148,13 @@ fn calculate_partial_shape(func_shape: &[usize], var_shape: &[usize]) -> Vec<usi
     }
 }
 
-pub fn chunk_arrays_for_streaming(
-    arrays: &ArrayMap,
-    var_type: VariableType,
-    chunk_size: usize,
-) -> Vec<ArrayData> {
-    let chunker = ArrayChunker::new(chunk_size);
-    let mut all_chunks = Vec::new();
-
-    for (name, array) in arrays {
-        let flat_data = create_flattened_view(array);
-        let chunks = chunker.chunk_array(name, &flat_data, var_type);
-        all_chunks.extend(chunks);
-    }
-
-    all_chunks
-}
-
-pub fn reassemble_arrays_from_chunks(chunks: &[ArrayData]) -> Result<ArrayMap> {
-    let mut array_data: HashMap<String, (Vec<f64>, Vec<usize>)> = HashMap::new();
-
-    // Group chunks by array name and collect data
-    for chunk in chunks {
-        let entry = array_data.entry(chunk.name.clone()).or_default();
-
-        // Extend the data vector
-        entry.0.extend(&chunk.data);
-
-        // For now, we assume shape information comes from elsewhere
-        // This is a simplification - in practice, we'd need to track shapes
-    }
-
-    // This is incomplete - we need shape information to properly reconstruct arrays
-    // For now, return an error indicating this needs to be implemented
-    Err(PhiloteError::not_implemented(
-        "reassemble_arrays_from_chunks",
-    ))
-}
-
+/// Check that every array whose name appears in `expected_meta` has the declared
+/// shape. Arrays with no matching declaration are ignored rather than rejected.
+///
+/// # Errors
+///
+/// Returns [`PhiloteError::ShapeMismatch`] on the first array whose shape differs
+/// from its declaration.
 pub fn validate_array_shapes(arrays: &ArrayMap, expected_meta: &[VariableMetaData]) -> Result<()> {
     let expected_shapes: HashMap<String, Vec<usize>> = expected_meta
         .iter()
@@ -182,37 +179,54 @@ pub fn validate_array_shapes(arrays: &ArrayMap, expected_meta: &[VariableMetaDat
     Ok(())
 }
 
+/// A map keyed by a pair of names, as partials are: `(function, variable)`.
+///
+/// Thin wrapper over a [`HashMap`] that gives partial-derivative collections a name
+/// and supports `dict[(f, x)]`-style indexing, mirroring Philote-Python.
+///
+/// # Panics
+///
+/// The [`Index`](std::ops::Index) and [`IndexMut`](std::ops::IndexMut) impls panic
+/// if the key is absent, like `HashMap`'s. Use [`get`](Self::get) /
+/// [`get_mut`](Self::get_mut) when the key may be missing.
 pub struct PairDict<T> {
     data: HashMap<(String, String), T>,
 }
 
 impl<T> PairDict<T> {
+    /// Create an empty map.
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
         }
     }
 
+    /// Insert a value, returning the previous one for that pair if there was one.
     pub fn insert(&mut self, key: (String, String), value: T) -> Option<T> {
         self.data.insert(key, value)
     }
 
+    /// Look up a value, or `None` if the pair is not present.
     pub fn get(&self, key: &(String, String)) -> Option<&T> {
         self.data.get(key)
     }
 
+    /// Look up a value mutably, or `None` if the pair is not present.
     pub fn get_mut(&mut self, key: &(String, String)) -> Option<&mut T> {
         self.data.get_mut(key)
     }
 
+    /// Iterate over `(pair, value)` entries in arbitrary order.
     pub fn iter(&self) -> impl Iterator<Item = (&(String, String), &T)> {
         self.data.iter()
     }
 
+    /// Iterate over the `(function, variable)` pairs in arbitrary order.
     pub fn keys(&self) -> impl Iterator<Item = &(String, String)> {
         self.data.keys()
     }
 
+    /// Iterate over the values in arbitrary order.
     pub fn values(&self) -> impl Iterator<Item = &T> {
         self.data.values()
     }
@@ -401,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn test_chunk_arrays_for_streaming() {
+    fn test_chunk_arrays_across_multiple_variables() {
         let mut arrays = HashMap::new();
         arrays.insert(
             "x".to_string(),
@@ -411,7 +425,7 @@ mod tests {
             "y".to_string(),
             ArrayD::from_shape_vec(vec![4], vec![10.0, 20.0, 30.0, 40.0]).unwrap(),
         );
-        let chunks = chunk_arrays_for_streaming(&arrays, VariableType::KInput, 3);
+        let chunks = crate::wire::chunk_arrays(&arrays, VariableType::KInput, 3);
         // x: 6 elements / 3 per chunk = 2 chunks
         // y: 4 elements / 3 per chunk = 2 chunks (3 + 1)
         // Total: 4 chunks

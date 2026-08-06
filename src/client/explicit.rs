@@ -1,296 +1,204 @@
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio_stream::StreamExt;
 use tonic::transport::Channel;
-use tonic::{Request, Streaming};
 
 use crate::client::base::DisciplineClient;
 use crate::philote_info::{
-    explicit_service_client::ExplicitServiceClient, variable_message::Payload, Array,
-    DiscreteVariable, VariableMessage, VariableType,
+    explicit_service_client::ExplicitServiceClient, PartialsMetaData, VariableMetaData,
+    VariableType,
 };
-use crate::types::{ArrayChunker, ArrayData, StreamOptions};
-use crate::{ArrayMap, DiscreteMap, PartialMap, PhiloteError, Result};
+use crate::types::StreamOptions;
+use crate::{wire, ArrayMap, DiscreteMap, PartialMap, PhiloteError, Result};
 
+/// Client for an explicit discipline server.
 pub struct ExplicitClient {
-    base_client: DisciplineClient,
-    explicit_client: ExplicitServiceClient<Channel>,
-    stream_options: StreamOptions,
-    rpc_timeout: Option<Duration>,
+    base: DisciplineClient,
+    explicit: ExplicitServiceClient<Channel>,
 }
 
 impl ExplicitClient {
+    /// Connect to an explicit discipline server at `dst`.
+    ///
+    /// One channel backs both the shared `DisciplineService` client and the
+    /// `ExplicitService` client.
     pub async fn connect<T>(dst: T) -> Result<Self>
     where
-        T: std::convert::TryInto<tonic::transport::Endpoint> + Clone,
+        T: std::convert::TryInto<tonic::transport::Endpoint>,
         T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let base_client = DisciplineClient::connect(dst.clone()).await?;
-
         let channel = tonic::transport::Endpoint::new(dst)
             .map_err(|e| PhiloteError::config_error(format!("Invalid endpoint: {:?}", e)))?
             .connect()
             .await
             .map_err(|e| PhiloteError::config_error(format!("Failed to connect: {}", e)))?;
 
-        let explicit_client = ExplicitServiceClient::new(channel);
-
         Ok(Self {
-            base_client,
-            explicit_client,
-            stream_options: StreamOptions::default(),
-            rpc_timeout: None,
+            base: DisciplineClient::from_channel(channel.clone()),
+            explicit: ExplicitServiceClient::new(channel),
         })
     }
 
+    /// Set the local streaming options; see
+    /// [`DisciplineClient::with_stream_options`].
     pub fn with_stream_options(mut self, options: StreamOptions) -> Self {
-        self.stream_options = options;
-        self.base_client = self.base_client.with_stream_options(options);
+        self.base = self.base.with_stream_options(options);
         self
     }
 
+    /// Apply a deadline to every RPC; see [`DisciplineClient::with_rpc_timeout`].
+    ///
+    /// The explicit RPCs build their requests through the base client, so they carry
+    /// the same deadline.
     pub fn with_rpc_timeout(mut self, timeout: Duration) -> Self {
-        self.rpc_timeout = Some(timeout);
-        self.base_client = self.base_client.with_rpc_timeout(timeout);
+        self.base = self.base.with_rpc_timeout(timeout);
         self
     }
 
-    fn make_request<T>(&self, inner: T) -> Request<T> {
-        let mut req = Request::new(inner);
-        if let Some(timeout) = self.rpc_timeout {
-            req.set_timeout(timeout);
-        }
-        req
+    /// Access the underlying discipline client.
+    pub fn base(&self) -> &DisciplineClient {
+        &self.base
     }
 
-    // Delegate base client methods
+    // --- Delegated discipline RPCs ---
+
+    /// Fetch the server's discipline properties; see [`DisciplineClient::get_info`].
     pub async fn get_info(&mut self) -> Result<crate::philote_info::DisciplineProperties> {
-        self.base_client.get_info().await
+        self.base.get_info().await
     }
 
+    /// Negotiate streaming options with the server; see
+    /// [`DisciplineClient::set_stream_options`].
     pub async fn set_stream_options(&mut self, options: StreamOptions) -> Result<()> {
-        self.stream_options = options;
-        self.base_client.set_stream_options(options).await
+        self.base.set_stream_options(options).await
     }
 
+    /// List the options the discipline accepts; see
+    /// [`DisciplineClient::get_available_options`].
     pub async fn get_available_options(&mut self) -> Result<HashMap<String, String>> {
-        self.base_client.get_available_options().await
+        self.base.get_available_options().await
     }
 
+    /// Set discipline options on the server; see [`DisciplineClient::set_options`].
     pub async fn set_options(&mut self, options: HashMap<String, serde_json::Value>) -> Result<()> {
-        self.base_client.set_options(options).await
+        self.base.set_options(options).await
     }
 
+    /// Run the discipline's setup on the server; see [`DisciplineClient::setup`].
+    ///
+    /// This discards the cached metadata, so
+    /// [`get_variable_definitions`](Self::get_variable_definitions) must be called
+    /// again before any compute call.
     pub async fn setup(&mut self) -> Result<()> {
-        self.base_client.setup().await
+        self.base.setup().await
     }
 
-    pub async fn get_variable_definitions(
-        &mut self,
-    ) -> Result<Vec<crate::philote_info::VariableMetaData>> {
-        self.base_client.get_variable_definitions().await
+    /// Fetch and cache variable definitions; see
+    /// [`DisciplineClient::get_variable_definitions`].
+    ///
+    /// Required before [`compute_function`](Self::compute_function) or
+    /// [`compute_gradient`](Self::compute_gradient), which decode responses against
+    /// the cached shapes.
+    pub async fn get_variable_definitions(&mut self) -> Result<Vec<VariableMetaData>> {
+        self.base.get_variable_definitions().await
     }
 
-    pub async fn get_partial_definitions(
-        &mut self,
-    ) -> Result<Vec<crate::philote_info::PartialsMetaData>> {
-        self.base_client.get_partial_definitions().await
+    /// Fetch and cache partials definitions; see
+    /// [`DisciplineClient::get_partial_definitions`].
+    pub async fn get_partial_definitions(&mut self) -> Result<Vec<PartialsMetaData>> {
+        self.base.get_partial_definitions().await
     }
 
-    pub async fn get_dynamic_variables(
-        &mut self,
-    ) -> Result<Vec<crate::philote_info::VariableMetaData>> {
-        self.base_client.get_dynamic_variables().await
+    /// Fetch variable definitions and return those with a dynamic shape; see
+    /// [`DisciplineClient::get_dynamic_variables`].
+    pub async fn get_dynamic_variables(&mut self) -> Result<Vec<VariableMetaData>> {
+        self.base.get_dynamic_variables().await
     }
 
-    pub async fn send_variable_shapes(
-        &mut self,
-        shapes: Vec<crate::philote_info::VariableMetaData>,
-    ) -> Result<()> {
-        self.base_client.send_variable_shapes(shapes).await
+    /// Send resolved shapes for dynamic variables; see
+    /// [`DisciplineClient::send_variable_shapes`].
+    ///
+    /// Also refreshes the cached shapes, so no re-fetch is needed afterwards.
+    pub async fn send_variable_shapes(&mut self, shapes: Vec<VariableMetaData>) -> Result<()> {
+        self.base.send_variable_shapes(shapes).await
     }
 
-    // Explicit-specific methods
+    /// Cached continuous variable metadata; see [`DisciplineClient::var_meta`].
+    ///
+    /// Empty until [`get_variable_definitions`](Self::get_variable_definitions) runs.
+    pub fn var_meta(&self) -> &[VariableMetaData] {
+        self.base.var_meta()
+    }
+
+    // --- Explicit RPCs ---
+
+    /// Evaluate the discipline.
     pub async fn compute_function(&mut self, inputs: &ArrayMap) -> Result<ArrayMap> {
-        let (outputs, _discrete) = self
+        let (outputs, _) = self
             .compute_function_with_discrete(inputs, &HashMap::new())
             .await?;
         Ok(outputs)
     }
 
+    /// Evaluate the discipline, passing and receiving discrete variables.
     pub async fn compute_function_with_discrete(
         &mut self,
         inputs: &ArrayMap,
         discrete_inputs: &DiscreteMap,
     ) -> Result<(ArrayMap, DiscreteMap)> {
-        let input_stream =
-            self.create_variable_message_stream(inputs, discrete_inputs, VariableType::KInput);
+        self.base.require_metadata()?;
+
+        let messages = wire::assemble_input_messages(
+            inputs,
+            None,
+            discrete_inputs,
+            self.base.stream_options().max_double_per_slice,
+        );
 
         let response = self
-            .explicit_client
-            .compute_function(self.make_request(input_stream))
+            .explicit
+            .compute_function(self.base.make_request(tokio_stream::iter(messages)))
             .await?;
 
-        let output_stream = response.into_inner();
-        self.process_variable_message_output_stream(output_stream)
-            .await
+        let mut stream = response.into_inner();
+        wire::recover_arrays(&mut stream, self.base.var_meta(), VariableType::KOutput).await
     }
 
+    /// Evaluate the discipline's gradients.
     pub async fn compute_gradient(&mut self, inputs: &ArrayMap) -> Result<PartialMap> {
         self.compute_gradient_with_discrete(inputs, &HashMap::new())
             .await
     }
 
+    /// Evaluate the discipline's gradients, passing discrete variables.
     pub async fn compute_gradient_with_discrete(
         &mut self,
         inputs: &ArrayMap,
         discrete_inputs: &DiscreteMap,
     ) -> Result<PartialMap> {
-        let input_stream =
-            self.create_variable_message_stream(inputs, discrete_inputs, VariableType::KInput);
+        self.base.require_metadata()?;
+
+        let messages = wire::assemble_input_messages(
+            inputs,
+            None,
+            discrete_inputs,
+            self.base.stream_options().max_double_per_slice,
+        );
 
         let response = self
-            .explicit_client
-            .compute_gradient(self.make_request(input_stream))
+            .explicit
+            .compute_gradient(self.base.make_request(tokio_stream::iter(messages)))
             .await?;
 
-        let partial_stream = response.into_inner();
-        self.process_partial_stream(partial_stream).await
-    }
-
-    fn create_variable_message_stream(
-        &self,
-        inputs: &ArrayMap,
-        discrete_inputs: &DiscreteMap,
-        var_type: VariableType,
-    ) -> impl futures_util::Stream<Item = VariableMessage> + Send {
-        let chunker = ArrayChunker::new(self.stream_options.max_double_per_slice);
-        let mut messages = Vec::new();
-
-        for (name, array) in inputs {
-            let flat_data = crate::utils::create_flattened_view(array);
-            let chunks = chunker.chunk_array(name, &flat_data, var_type);
-
-            for chunk in chunks {
-                messages.push(VariableMessage {
-                    payload: Some(Payload::Continuous(Array::from(chunk))),
-                });
-            }
-        }
-
-        for (name, value) in discrete_inputs {
-            messages.push(VariableMessage {
-                payload: Some(Payload::Discrete(DiscreteVariable {
-                    name: name.clone(),
-                    r#type: VariableType::KDiscreteInput.into(),
-                    value: Some(value.clone()),
-                })),
-            });
-        }
-
-        tokio_stream::iter(messages)
-    }
-
-    async fn process_variable_message_output_stream(
-        &self,
-        mut stream: Streaming<VariableMessage>,
-    ) -> Result<(ArrayMap, DiscreteMap)> {
-        let mut array_chunks: HashMap<String, Vec<ArrayData>> = HashMap::new();
-        let mut discrete_outputs: DiscreteMap = HashMap::new();
-
-        while let Some(msg) = stream.next().await {
-            let var_msg = msg?;
-            match var_msg.payload {
-                Some(Payload::Continuous(array)) => {
-                    let array_data = ArrayData::try_from(array)?;
-                    array_chunks
-                        .entry(array_data.name.clone())
-                        .or_default()
-                        .push(array_data);
-                }
-                Some(Payload::Discrete(discrete_var)) => {
-                    if let Some(value) = discrete_var.value {
-                        discrete_outputs.insert(discrete_var.name, value);
-                    }
-                }
-                None => {}
-            }
-        }
-
-        let mut outputs = HashMap::new();
-        for (name, chunks) in array_chunks {
-            let array = self.reconstruct_array_from_chunks(&chunks)?;
-            outputs.insert(name, array);
-        }
-
-        Ok((outputs, discrete_outputs))
-    }
-
-    async fn process_partial_stream(
-        &self,
-        mut stream: Streaming<VariableMessage>,
-    ) -> Result<PartialMap> {
-        let mut partial_chunks: HashMap<(String, String), Vec<ArrayData>> = HashMap::new();
-
-        while let Some(msg) = stream.next().await {
-            let var_msg = msg?;
-            if let Some(Payload::Continuous(array)) = var_msg.payload {
-                let array_data = ArrayData::try_from(array)?;
-                if let Some(subname) = &array_data.subname {
-                    let key = (array_data.name.clone(), subname.clone());
-                    partial_chunks.entry(key).or_default().push(array_data);
-                }
-            }
-        }
-
-        let mut partials = HashMap::new();
-        for (key, chunks) in partial_chunks {
-            let array = self.reconstruct_array_from_chunks(&chunks)?;
-            partials.insert(key, array);
-        }
-
-        Ok(partials)
-    }
-
-    fn reconstruct_array_from_chunks(&self, chunks: &[ArrayData]) -> Result<ndarray::ArrayD<f64>> {
-        if chunks.is_empty() {
-            return Err(PhiloteError::array_error("No chunks to reconstruct"));
-        }
-
-        let mut sorted_chunks = chunks.to_vec();
-        sorted_chunks.sort_by_key(|c| c.start);
-
-        let total_size = sorted_chunks.last().unwrap().end + 1;
-        let mut data = vec![0.0; total_size];
-
-        for chunk in &sorted_chunks {
-            let chunk_len = chunk.data.len();
-            let expected_len = chunk.end - chunk.start + 1;
-
-            if chunk_len != expected_len {
-                return Err(PhiloteError::array_error(format!(
-                    "Chunk size mismatch: expected {}, got {}",
-                    expected_len, chunk_len
-                )));
-            }
-
-            for (i, &value) in chunk.data.iter().enumerate() {
-                data[chunk.start + i] = value;
-            }
-        }
-
-        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[data.len()]), data)
-            .map_err(|e| PhiloteError::array_error(format!("Failed to create array: {}", e)))
+        let mut stream = response.into_inner();
+        wire::recover_partials(&mut stream, self.base.var_meta(), self.base.partials_meta()).await
     }
 }
 
 impl Clone for ExplicitClient {
     fn clone(&self) -> Self {
         Self {
-            base_client: self.base_client.clone(),
-            explicit_client: self.explicit_client.clone(),
-            stream_options: self.stream_options,
-            rpc_timeout: self.rpc_timeout,
+            base: self.base.clone(),
+            explicit: self.explicit.clone(),
         }
     }
 }

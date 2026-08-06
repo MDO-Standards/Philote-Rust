@@ -2,10 +2,11 @@
 name = "philote-mdo"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.70"
 description = "A Rust library for building MDO analysis discipline servers using the Philote gRPC standard"
 license = "Apache-2.0"
-repository = "https://github.com/chrislupp/Philote-Rust"
-homepage = "https://github.com/chrislupp/Philote-Rust"
+repository = "https://github.com/MDO-Standards/Philote-Rust"
+homepage = "https://github.com/MDO-Standards/Philote-Rust"
 documentation = "https://docs.rs/philote-mdo"
 readme = "README.md"
 keywords = ["mdo", "grpc", "engineering", "optimization", "multidisciplinary"]
@@ -17,11 +18,16 @@ include = [
     "proto/data.proto",
     "proto/disciplines.proto",
     "build.rs",
-    "Cargo.toml",
-    "LICENSE",
-    "README.md",
-    "CHANGELOG.md",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/CHANGELOG.md",
 ]
+
+# `build.rs` invokes `protoc`, which docs.rs builders do not provide. The vendored
+# binary keeps both docs.rs and protoc-less downstream users building.
+[package.metadata.docs.rs]
+all-features = true
 
 [lib]
 name = "philote_mdo"
@@ -47,6 +53,12 @@ async-trait = "0.1"
 
 [build-dependencies]
 tonic-build = "0.12"
+protoc-bin-vendored = "3.0"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+approx = "0.5"
 
 [features]
 default = []
@@ -62,3 +74,19 @@ path = "examples/client_example.rs"
 [[example]]
 name = "server_runner"
 path = "examples/server_runner.rs"
+
+[[example]]
+name = "paraboloid_server"
+path = "examples/paraboloid_server.rs"
+
+[[example]]
+name = "paraboloid_client"
+path = "examples/paraboloid_client.rs"
+
+[[example]]
+name = "quadratic_implicit"
+path = "examples/quadratic_implicit.rs"
+
+[[example]]
+name = "quadratic_client"
+path = "examples/quadratic_client.rs"
